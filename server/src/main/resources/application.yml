@@ -1,0 +1,100 @@
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: pichost-server
+  profiles:
+    # 默认使用 MySQL；本地免安装体验可加 --spring.profiles.active=h2
+    default: mysql
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 30MB
+      max-request-size: 120MB
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:pichost}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:pichost123}
+    hikari:
+      pool-name: PicHostHikari
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 10000
+      max-lifetime: 1800000
+  sql:
+    init:
+      mode: always
+      continue-on-error: false
+      schema-locations: classpath:db/schema-mysql.sql
+      encoding: UTF-8
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+      table-underline: true
+  type-aliases-package: com.pichost.entity
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+# ==================== PicHost 业务配置 ====================
+app:
+  jwt:
+    # 生产环境务必通过环境变量覆盖，长度 >= 32 字节
+    secret: ${JWT_SECRET:pichost-dev-jwt-secret-key-change-me-in-production-2024}
+    expire-minutes: ${JWT_EXPIRE_MINUTES:10080}
+  # 存储配置中敏感字段（token / secretKey 等）的 AES 加密口令
+  crypto-key: ${CRYPTO_KEY:pichost-dev-crypto-key-change-me-in-production}
+  upload:
+    max-size: ${UPLOAD_MAX_SIZE:31457280}
+    allowed-extensions: jpg,jpeg,png,gif,webp,bmp,svg,ico,avif,tiff
+    # 单个目录最多放多少个文件，超过就写到下一个 001/002/... 分片目录（0 = 关闭分片）
+    shard-size: ${UPLOAD_SHARD_SIZE:500}
+    # 从存储导入时最多扫描多少个远端文件
+    import-max-files: ${IMPORT_MAX_FILES:20000}
+  # 同一用户上传相同内容（sha256 相同）时直接复用已有记录
+  dedupe-enabled: ${UPLOAD_DEDUPE:true}
+  repo-move:
+    # 每个提交处理多少文件；太大 GitHub 会返回 502（实测 1000 个文件 / 2000 条记录必失败）
+    batch-files: ${REPO_MOVE_BATCH:200}
+    # 创建 tree / commit 遇到 5xx 的重试次数
+    retry-times: ${REPO_MOVE_RETRY:6}
+  migrate:
+    # 文件级并发数：每张图要「下载 + 上传」两次网络往返，并发是最主要的提速手段
+    concurrency: ${MIGRATE_CONCURRENCY:6}
+    # 命中限流 / 5xx / 超时时的重试次数（GitHub 有 5000 请求/小时的配额）
+    retry-times: ${MIGRATE_RETRY_TIMES:2}
+  init-admin:
+    enabled: ${INIT_ADMIN:true}
+    username: ${ADMIN_USERNAME:admin}
+    password: ${ADMIN_PASSWORD:admin123}
+    nickname: 超级管理员
+  cors:
+    allowed-origins: ${CORS_ORIGINS:*}
+
+logging:
+  level:
+    root: INFO
+    com.pichost: INFO

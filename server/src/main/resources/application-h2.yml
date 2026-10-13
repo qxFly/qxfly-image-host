@@ -1,0 +1,26 @@
+# 本地免安装冒烟启动：java -jar pichost-server.jar --spring.profiles.active=h2
+# 数据存内存，进程退出即清空，仅用于快速验证接口与前端联调。
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:pichost;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+    hikari:
+      maximum-pool-size: 5
+  sql:
+    init:
+      mode: always
+      continue-on-error: false
+      schema-locations: classpath:db/schema-h2.sql
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+logging:
+  level:
+    com.pichost: DEBUG

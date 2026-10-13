@@ -1,0 +1,37 @@
+# ---- Java / Maven ----
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.class
+*.jar
+!**/maven-wrapper.jar
+
+# ---- Node ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+pnpm-debug.log*
+
+# ---- Tauri / Rust ----
+src-tauri/target/
+src-tauri/gen/
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# ---- 本地工具与运行数据 ----
+.tools/
+logs/
+*.log
+.env
+.env.local
+uploads/
+
+# ---- 便携运行时与打包产物（体积大，不入库）----
+runtime/
+dist/
+config/local.env
