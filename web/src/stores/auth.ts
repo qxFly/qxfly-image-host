@@ -9,6 +9,18 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserVO | null>(null)
   const isLoggedIn = computed(() => token.value.length > 0)
 
+  /**
+   * 是不是超级管理员。
+   * 兼容历史数据里的 ADMIN（后端会归一化成 SUPER_ADMIN），默认按普通用户处理。
+   */
+  const isSuperAdmin = computed(() => {
+    const role = user.value?.role
+    return role === 'SUPER_ADMIN' || role === 'ADMIN'
+  })
+  const roleLabel = computed(
+    () => user.value?.roleLabel || (isSuperAdmin.value ? '超级管理员' : '普通用户'),
+  )
+
   function setToken(value: string) {
     token.value = value
     localStorage.setItem(TOKEN_KEY, value)
@@ -36,5 +48,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(TOKEN_KEY)
   }
 
-  return { token, user, isLoggedIn, setToken, login, loadUser, logout }
+  return { token, user, isLoggedIn, isSuperAdmin, roleLabel, setToken, login, loadUser, logout }
 })

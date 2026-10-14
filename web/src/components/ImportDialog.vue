@@ -62,8 +62,8 @@
         :current-page="preview.page"
         :page-size="preview.size"
         :total="preview.scanned"
-        :pager-count="7"
-        layout="prev, pager, next, total"
+        :pager-count="5"
+        layout="total, prev, pager, next"
         background
         small
         @current-change="scan"
@@ -228,7 +228,7 @@ async function doImport(all: boolean) {
 <style scoped>
 .pager {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
+  justify-content: center;
+  margin-top: 12px;
 }
 </style>

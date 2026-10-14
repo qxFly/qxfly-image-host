@@ -1,12 +1,12 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    把 PicHost 打成可分发的「一键包」：Windows 版与 Ubuntu 版。
+    把 qxfly-image-host 打成可分发的「一键包」：Windows 版与 Ubuntu 版。
 
 .DESCRIPTION
     产物目录：
-        dist\PicHost-win-x64\      自带 runtime\win-x64（JDK+Node 已解压），双击 start.cmd 即用
-        dist\PicHost-linux-x64\    runtime\_cache 内含 Linux 版 JDK/Node 压缩包，
+        dist\qxfly-image-host-win-x64\      自带 runtime\win-x64（JDK+Node 已解压），双击 start.cmd 即用
+        dist\qxfly-image-host-linux-x64\    runtime\_cache 内含 Linux 版 JDK/Node 压缩包，
                                    Ubuntu 上首次执行 ./start.sh 会自动原生解压
 
     两个包都内置了生产版 jar（前端界面已打进 jar，-Mode prod 单进程运行）。
@@ -74,7 +74,7 @@ function Get-DirSize {
 
 Write-Host ''
 Write-Host '  ============================================================' -ForegroundColor DarkCyan
-Write-Host '     PicHost 一键包构建' -ForegroundColor White
+Write-Host '     qxfly-image-host 一键包构建' -ForegroundColor White
 Write-Host '  ============================================================' -ForegroundColor DarkCyan
 
 # ---------------------------------------------------------------- 编译
@@ -98,7 +98,7 @@ if (-not $SkipBuild) {
     Write-Ok '后端构建完成'
 }
 
-$jar = Join-Path $ServerDir 'target\pichost-server.jar'
+$jar = Join-Path $ServerDir 'target\qxfly-image-host.jar'
 if (-not (Test-Path $jar)) { Write-Fail ('缺少 ' + $jar + '，请先执行构建（去掉 -SkipBuild）'); exit 1 }
 $distWeb = Join-Path $WebDir 'dist'
 if (-not (Test-Path (Join-Path $distWeb 'index.html'))) { Write-Fail '缺少 web\dist，请先构建前端'; exit 1 }
@@ -117,7 +117,7 @@ function New-PackageBase {
         $src = Join-Path $ServerDir $item
         if (Test-Path $src) { Copy-Tree -From $src -To (Join-Path $serverOut $item) }
     }
-    Copy-Item -LiteralPath $jar -Destination (Join-Path $serverOut 'target\pichost-server.jar') -Force
+    Copy-Item -LiteralPath $jar -Destination (Join-Path $serverOut 'target\qxfly-image-host.jar') -Force
 
     # 前端
     $webOut = Join-Path $Target 'web'
@@ -146,7 +146,7 @@ function New-PackageBase {
 }
 
 # ---------------------------------------------------------------- Windows 包
-$winTarget = Join-Path $DistDir 'PicHost-win-x64'
+$winTarget = Join-Path $DistDir 'qxfly-image-host-win-x64'
 Write-Step '组装 Windows 包 ...'
 New-PackageBase -Target $winTarget
 Copy-Tree -From (Join-Path $Root 'runtime\win-x64') -To (Join-Path $winTarget 'runtime\win-x64')
@@ -156,7 +156,7 @@ foreach ($item in @('start.ps1', 'start.cmd', 'mysql-service.cmd', 'mysql.cmd'))
 Write-Ok ('Windows 包完成：' + [math]::Round((Get-DirSize $winTarget) / 1MB, 1) + ' MB')
 
 # ---------------------------------------------------------------- Linux 包
-$linuxTarget = Join-Path $DistDir 'PicHost-linux-x64'
+$linuxTarget = Join-Path $DistDir 'qxfly-image-host-linux-x64'
 Write-Step '组装 Linux 包 ...'
 New-PackageBase -Target $linuxTarget
 New-Item -ItemType Directory -Force -Path (Join-Path $linuxTarget 'runtime\_cache') | Out-Null
@@ -174,7 +174,7 @@ Write-Ok ('Linux 包完成：' + [math]::Round((Get-DirSize $linuxTarget) / 1MB,
 # ---------------------------------------------------------------- 打包
 if ($Zip) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    foreach ($name in @('PicHost-win-x64', 'PicHost-linux-x64')) {
+    foreach ($name in @('qxfly-image-host-win-x64', 'qxfly-image-host-linux-x64')) {
         $folder = Join-Path $DistDir $name
         $zipPath = Join-Path $DistDir ($name + '.zip')
         if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
@@ -186,6 +186,6 @@ if ($Zip) {
 
 Write-Host ''
 Write-Ok ('产物目录：' + $DistDir)
-Write-Info 'Windows：把 PicHost-win-x64 拷到目标机，双击 start.cmd'
-Write-Info 'Ubuntu ：把 PicHost-linux-x64 拷到目标机，./start.sh（首次会自动解压运行时）'
+Write-Info 'Windows：把 qxfly-image-host-win-x64 拷到目标机，双击 start.cmd'
+Write-Info 'Ubuntu ：把 qxfly-image-host-linux-x64 拷到目标机，./start.sh（首次会自动解压运行时）'
 Write-Host ''

@@ -1,33 +1,42 @@
 <template>
   <el-container class="layout">
-    <el-aside width="212px" class="layout-aside">
+    <!-- 桌面端：常驻侧栏；小屏收进抽屉 -->
+    <el-aside v-if="!isMobile" width="212px" class="layout-aside">
       <div class="layout-logo">
         <el-icon :size="20"><PictureFilled /></el-icon>
-        <span>PicHost</span>
+        <span>qxfly-image-host</span>
       </div>
-      <el-menu :default-active="activeMenu" router class="layout-menu">
-        <el-menu-item index="/dashboard">
-          <el-icon><DataLine /></el-icon><span>概览</span>
-        </el-menu-item>
-        <el-menu-item index="/gallery">
-          <el-icon><PictureRounded /></el-icon><span>图库</span>
-        </el-menu-item>
-        <el-menu-item index="/upload">
-          <el-icon><UploadFilled /></el-icon><span>上传</span>
-        </el-menu-item>
-        <el-menu-item index="/storage">
-          <el-icon><Coin /></el-icon><span>存储设置</span>
-        </el-menu-item>
-        <el-menu-item index="/profile">
-          <el-icon><User /></el-icon><span>个人中心</span>
-        </el-menu-item>
-      </el-menu>
+      <NavMenu />
     </el-aside>
+
+    <el-drawer
+      v-model="menuVisible"
+      direction="ltr"
+      size="230px"
+      :with-header="false"
+      class="layout-drawer"
+    >
+      <!-- 深色底放在我自己的容器上：el-drawer 的模板根是 teleport，
+           传进去的 class 与 scoped 样式落点不可靠，靠它上色会出现白底白字 -->
+      <div class="layout-drawer-inner">
+        <div class="layout-logo">
+          <el-icon :size="20"><PictureFilled /></el-icon>
+          <span>qxfly-image-host</span>
+        </div>
+        <NavMenu @navigate="menuVisible = false" />
+      </div>
+    </el-drawer>
 
     <el-container>
       <el-header class="layout-header">
+        <el-button v-if="isMobile" link class="layout-menu-button" @click="menuVisible = true">
+          <el-icon :size="20"><Menu /></el-icon>
+        </el-button>
         <span class="layout-title">{{ pageTitle }}</span>
         <div class="toolbar-spacer"></div>
+        <el-tag v-if="auth.user" size="small" :type="auth.isSuperAdmin ? 'warning' : 'info'" effect="plain">
+          {{ auth.roleLabel }}
+        </el-tag>
         <el-tag v-if="systemInfo" size="small" type="info" effect="plain">v{{ systemInfo.version }}</el-tag>
         <el-dropdown @command="onCommand">
           <span class="layout-user">
@@ -47,6 +56,9 @@
       <el-main class="layout-main">
         <router-view />
       </el-main>
+
+      <!-- 上传浮层挂在布局上：切换路由不会影响上传，也能一直看到进度 -->
+      <UploadPanel />
     </el-container>
   </el-container>
 </template>
@@ -55,6 +67,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import UploadPanel from '@/components/UploadPanel.vue'
+import NavMenu from '@/components/NavMenu.vue'
+import { useIsMobile } from '@/utils/responsive'
 import { useAuthStore } from '@/stores/auth'
 import { fetchSystemInfo } from '@/api/system'
 import type { SystemInfo } from '@/types'
@@ -64,8 +79,11 @@ const router = useRouter()
 const auth = useAuthStore()
 const systemInfo = ref<SystemInfo | null>(null)
 
-const activeMenu = computed(() => route.path)
-const pageTitle = computed(() => (route.meta.title as string) || 'PicHost')
+/** 小屏用抽屉菜单 */
+const isMobile = useIsMobile()
+const menuVisible = ref(false)
+
+const pageTitle = computed(() => (route.meta.title as string) || 'qxfly-image-host')
 const displayName = computed(() => auth.user?.nickname || auth.user?.username || '未登录')
 const avatarText = computed(() => displayName.value.slice(0, 1).toUpperCase())
 
@@ -169,5 +187,35 @@ async function onCommand(command: string) {
   padding: 0;
   overflow: auto;
   background: #f5f7fa;
+}
+
+/* 抽屉里的菜单要和侧栏一样是深色底，否则白底白字什么都看不见 */
+.layout-drawer :deep(.el-drawer__body) {
+  padding: 0;
+  background: #1f2a44;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 分组标题与子项的文字颜色 */
+.layout-drawer :deep(.el-sub-menu__title),
+.layout-menu :deep(.el-sub-menu__title) {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.layout-menu :deep(.el-sub-menu__title:hover),
+.layout-menu :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu) {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.layout-menu :deep(.el-sub-menu .el-menu-item) {
+  min-width: 0;
+  font-size: 13px;
 }
 </style>

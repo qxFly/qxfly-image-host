@@ -8,7 +8,7 @@ server:
 
 spring:
   application:
-    name: pichost-server
+    name: qxfly-image-host
   profiles:
     # 默认使用 MySQL；本地免安装体验可加 --spring.profiles.active=h2
     default: mysql
@@ -19,15 +19,17 @@ spring:
   servlet:
     multipart:
       enabled: true
-      max-file-size: 30MB
-      max-request-size: 120MB
+      # 单张/单次请求的大小限制由应用层判断（可在「系统设置」里改，支持无上限），
+      # 所以这里默认不设硬上限；需要服务端兜底时用环境变量给个值（例如 UPLOAD_SERVLET_MAX=2GB）
+      max-file-size: ${UPLOAD_SERVLET_MAX:-1}
+      max-request-size: ${UPLOAD_SERVLET_MAX_REQUEST:-1}
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:pichost}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:qxfly-image-host}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true
     username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:pichost123}
+    password: ${MYSQL_PASSWORD:123456}
     hikari:
-      pool-name: PicHostHikari
+      pool-name: QxflyImageHostHikari
       maximum-pool-size: 10
       minimum-idle: 2
       connection-timeout: 10000
@@ -48,7 +50,7 @@ mybatis-plus:
     db-config:
       id-type: auto
       table-underline: true
-  type-aliases-package: com.pichost.entity
+  type-aliases-package: com.qxfly.imagehost.entity
 
 management:
   endpoints:
@@ -59,7 +61,7 @@ management:
     health:
       show-details: never
 
-# ==================== PicHost 业务配置 ====================
+# ==================== qxfly-image-host 业务配置 ====================
 app:
   jwt:
     # 生产环境务必通过环境变量覆盖，长度 >= 32 字节
@@ -68,12 +70,17 @@ app:
   # 存储配置中敏感字段（token / secretKey 等）的 AES 加密口令
   crypto-key: ${CRYPTO_KEY:pichost-dev-crypto-key-change-me-in-production}
   upload:
+    # 单张文件大小上限的「出厂默认值」；数据库里的系统设置优先（可在「系统设置」里改成无上限）
     max-size: ${UPLOAD_MAX_SIZE:31457280}
     allowed-extensions: jpg,jpeg,png,gif,webp,bmp,svg,ico,avif,tiff
     # 单个目录最多放多少个文件，超过就写到下一个 001/002/... 分片目录（0 = 关闭分片）
     shard-size: ${UPLOAD_SHARD_SIZE:500}
     # 从存储导入时最多扫描多少个远端文件
     import-max-files: ${IMPORT_MAX_FILES:20000}
+    # 上传临时目录（留空用系统临时目录）。上传会先落到这里再流式写存储，内存占用与文件大小无关
+    temp-dir: ${UPLOAD_TEMP_DIR:}
+    # GitHub contents 模式单文件上限（字节，默认 95MB）：该模式必须整份 Base64 进内存
+    github-inline-limit: ${GITHUB_INLINE_LIMIT:99614720}
   # 同一用户上传相同内容（sha256 相同）时直接复用已有记录
   dedupe-enabled: ${UPLOAD_DEDUPE:true}
   repo-move:
@@ -86,6 +93,29 @@ app:
     concurrency: ${MIGRATE_CONCURRENCY:6}
     # 命中限流 / 5xx / 超时时的重试次数（GitHub 有 5000 请求/小时的配额）
     retry-times: ${MIGRATE_RETRY_TIMES:2}
+  # 回收站目录：逻辑删除时把仓库文件搬到这里（GitHub contents 模式，走引用式搬移，不产生流量）
+  trash:
+    prefix: ${TRASH_PREFIX:_trash}
+  # 本地存储：把图片存在运行本服务的这台机器上（自带访问地址 /files/...，不需要任何第三方服务）
+  local-storage:
+    # 默认存储目录；相对路径以服务进程的工作目录为基准
+    base-dir: ${LOCAL_STORAGE_DIR:uploads}
+    # 对外访问前缀；留空则用访问本服务所用的地址（放在 Nginx/CDN 后面时填外部地址）
+    public-base-url: ${LOCAL_STORAGE_PUBLIC_URL:}
+  # 本服务对外基地址（例如 https://img.example.com）。留空则用当前请求的地址；
+  # 反向代理后面建议显式配置，否则生成的缩略图/本地存储直链会指向代理后面的地址
+  public-base-url: ${PUBLIC_BASE_URL:}
+  # 缩略图：给没有原生缩略图的图片按需生成（本地磁盘缓存 + 带签名的公开直链）
+  thumb:
+    enabled: ${THUMB_ENABLED:true}
+    default-width: ${THUMB_WIDTH:400}
+    cache-dir: ${THUMB_CACHE_DIR:thumbs}
+    # 太大的原图不生成缩略图（要整份读进内存），直接退回原图直链
+    max-source-size: ${THUMB_MAX_SOURCE:20971520}
+  # 账号注册：默认关闭（账号由超级管理员在「用户管理」里创建）
+  # 设为 true 则任何人可自助注册，注册出来的账号是普通用户（仅能浏览查看下载）
+  register:
+    enabled: ${REGISTER_ENABLED:false}
   init-admin:
     enabled: ${INIT_ADMIN:true}
     username: ${ADMIN_USERNAME:admin}
@@ -97,4 +127,4 @@ app:
 logging:
   level:
     root: INFO
-    com.pichost: INFO
+    com.qxfly.imagehost: INFO

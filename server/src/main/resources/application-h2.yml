@@ -1,4 +1,4 @@
-# 本地免安装冒烟启动：java -jar pichost-server.jar --spring.profiles.active=h2
+# 本地免安装冒烟启动：java -jar qxfly-image-host.jar --spring.profiles.active=h2
 # 数据存内存，进程退出即清空，仅用于快速验证接口与前端联调。
 server:
   port: ${SERVER_PORT:8080}
@@ -6,7 +6,7 @@ server:
 spring:
   datasource:
     driver-class-name: org.h2.Driver
-    url: jdbc:h2:mem:pichost;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    url: jdbc:h2:mem:qxfly-image-host;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     username: sa
     password: ""
     hikari:
@@ -23,4 +23,4 @@ spring:
 
 logging:
   level:
-    com.pichost: DEBUG
+    com.qxfly.imagehost: DEBUG

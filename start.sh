@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================
-#  PicHost 一键启动（Ubuntu / Debian 等 Linux）
+#  qxfly-image-host 一键启动（Ubuntu / Debian 等 Linux）
 #
 #  除数据库外，运行环境全部取自项目根目录 runtime/：
 #     runtime/linux-x64/jdk    便携 JDK 17
@@ -12,6 +12,7 @@
 #  ./start.sh -Database h2        强制使用 H2 内存库
 #  ./start.sh -Action status      查看状态
 #  ./start.sh -Action stop        停止
+#  ./start.sh -BackendPort 8081 -WebPort 5174   改端口（也可写进 config/local.env）
 # =============================================================
 set -euo pipefail
 
@@ -23,10 +24,20 @@ CONFIG_DIR="$ROOT/config"
 RUNTIME_DIR="$ROOT/runtime"
 CACHE_DIR="$RUNTIME_DIR/_cache"
 ENV_FILE="$CONFIG_DIR/local.env"
-BACKEND_JAR="$SERVER_DIR/target/pichost-server.jar"
-BACKEND_PORT=8080
-WEB_PORT=5173
-HEALTH_URL="http://127.0.0.1:$BACKEND_PORT/actuator/health"
+BACKEND_JAR="$SERVER_DIR/target/qxfly-image-host.jar"
+# 端口优先级：命令行参数 / 环境变量 > config/local.env > 默认 8080 / 5173
+DEFAULT_BACKEND_PORT=8080
+DEFAULT_WEB_PORT=5173
+# 显式给的值（空 = 没给，交给 local.env / 默认值）
+PRESET_BACKEND_PORT="${BACKEND_PORT:-}"
+PRESET_WEB_PORT="${WEB_PORT:-}"
+BACKEND_PORT="$DEFAULT_BACKEND_PORT"
+WEB_PORT="$DEFAULT_WEB_PORT"
+HEALTH_URL=""
+# JVM 参数：环境变量 / config.local.env 里的 JAVA_OPTS 优先（单张无上限时全程流式，堆不用很大）
+DEFAULT_JAVA_OPTS="-Xms256m -Xmx1g -XX:+UseG1GC"
+PRESET_JAVA_OPTS="${JAVA_OPTS:-}"
+JAVA_OPTS=""
 
 ACTION="start"
 TARGET="all"
@@ -37,7 +48,7 @@ BACKEND_PID=""
 WEB_PID=""
 EFFECTIVE_DB="mysql"
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,6 +56,8 @@ while [ $# -gt 0 ]; do
     -Target|--target)     TARGET="$2"; shift 2 ;;
     -Mode|--mode)         MODE="$2"; shift 2 ;;
     -Database|--database) DATABASE="$2"; shift 2 ;;
+    -BackendPort|--backend-port) PRESET_BACKEND_PORT="$2"; shift 2 ;;
+    -WebPort|--web-port)         PRESET_WEB_PORT="$2"; shift 2 ;;
     -NoBrowser|--no-browser) OPEN_BROWSER="no"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数：$1（用 -h 查看用法）" >&2; exit 1 ;;
@@ -67,7 +80,7 @@ info() { printf '%s      %s%s\n' "$C_GRAY" "$1" "$C_RESET"; }
 banner() {
   echo
   printf '%s  ============================================================%s\n' "$C_CYAN" "$C_RESET"
-  printf '%s     PicHost 多云端图床管理  ·  一键启动（Linux）%s\n' "$C_WHITE" "$C_RESET"
+  printf '%s     qxfly-image-host 多云端图床管理  ·  一键启动（Linux）%s\n' "$C_WHITE" "$C_RESET"
   printf '%s  ============================================================%s\n' "$C_CYAN" "$C_RESET"
 }
 
@@ -235,9 +248,29 @@ load_local_env() {
     value="$(printf '%s' "$line" | cut -d= -f2-)"
     case "$key" in
       MYSQL_HOST|MYSQL_PORT|MYSQL_DATABASE|MYSQL_USER|MYSQL_PASSWORD) export "$key=$value" ;;
+      BACKEND_PORT) BACKEND_PORT="$value" ;;
+      WEB_PORT) WEB_PORT="$value" ;;
+      JAVA_OPTS) JAVA_OPTS="$value" ;;
     esac
   done < "$ENV_FILE"
   return 0
+}
+
+# 端口最终确定：命令行里显式给的优先，其次 local.env，最后默认值
+resolve_ports() {
+  if [ -n "$PRESET_BACKEND_PORT" ]; then BACKEND_PORT="$PRESET_BACKEND_PORT"; fi
+  if [ -n "$PRESET_WEB_PORT" ]; then WEB_PORT="$PRESET_WEB_PORT"; fi
+  case "$BACKEND_PORT" in ''|*[!0-9]*) BACKEND_PORT="$DEFAULT_BACKEND_PORT" ;; esac
+  case "$WEB_PORT" in ''|*[!0-9]*) WEB_PORT="$DEFAULT_WEB_PORT" ;; esac
+  HEALTH_URL="http://127.0.0.1:$BACKEND_PORT/actuator/health"
+  # 传给子进程：后端读 SERVER_PORT（application.yml），Vite 读 WEB_PORT / BACKEND_PORT（vite.config.ts）
+  export SERVER_PORT="$BACKEND_PORT"
+  export BACKEND_PORT
+  export WEB_PORT
+  # JVM 参数：显式给的 > local.env > 默认
+  if [ -n "$PRESET_JAVA_OPTS" ]; then JAVA_OPTS="$PRESET_JAVA_OPTS"; fi
+  if [ -z "$JAVA_OPTS" ]; then JAVA_OPTS="$DEFAULT_JAVA_OPTS"; fi
+  export JAVA_OPTS
 }
 
 resolve_database() {
@@ -310,7 +343,8 @@ start_backend() {
   if [ "$DATABASE" = "h2" ]; then extra="--spring.profiles.active=h2"; fi
 
   step "启动后端（$DATABASE 模式，端口 $BACKEND_PORT）..."
-  (cd "$SERVER_DIR" && exec java -Dfile.encoding=UTF-8 -jar "$BACKEND_JAR" $extra) >"$LOG_DIR/backend.log" 2>&1 &
+  # JAVA_OPTS 有意不加引号：里面的多个参数要按空格拆开传给 java
+  (cd "$SERVER_DIR" && exec java $JAVA_OPTS -Dfile.encoding=UTF-8 -jar "$BACKEND_JAR" $extra) >"$LOG_DIR/backend.log" 2>&1 &
   BACKEND_PID=$!
   info "日志 : $LOG_DIR/backend.log"
 
@@ -350,7 +384,7 @@ start_frontend() {
   fi
   mkdir -p "$LOG_DIR"
   step "启动前端开发服务器（端口 $WEB_PORT）..."
-  (cd "$WEB_DIR" && exec "$NPM_CMD" run dev) >"$LOG_DIR/web.log" 2>&1 &
+  (cd "$WEB_DIR" && exec "$NPM_CMD" run dev -- --port "$WEB_PORT") >"$LOG_DIR/web.log" 2>&1 &
   WEB_PID=$!
   info "日志 : $LOG_DIR/web.log"
   if wait_http; then
@@ -416,13 +450,18 @@ show_summary() {
 banner
 
 if [ ! -f "$SERVER_DIR/pom.xml" ] || [ ! -f "$WEB_DIR/package.json" ]; then
-  fail "当前目录不像是 PicHost 项目根目录：$ROOT"
+  fail "当前目录不像是 qxfly-image-host 项目根目录：$ROOT"
   exit 1
 fi
 
 mkdir -p "$LOG_DIR"
 
 if [ "$MODE" = "prod" ] && [ "$TARGET" = "all" ]; then TARGET="backend"; fi
+
+# 端口要在 status / stop / start 之前定好
+if load_local_env; then ok '已加载配置 config/local.env'; fi
+resolve_ports
+info "后端端口 $BACKEND_PORT，前端端口 $WEB_PORT（改 config/local.env 或用 -BackendPort / -WebPort）"
 
 case "$ACTION" in
   status)
@@ -454,7 +493,6 @@ fi
 ensure_runtime "$need_node"
 
 if [ "$TARGET" = "backend" ] || [ "$TARGET" = "all" ]; then
-  if load_local_env; then ok '已加载数据库配置 config/local.env'; fi
   resolve_database
 fi
 

@@ -7,6 +7,7 @@ import 'element-plus/dist/index.css'
 import '@/styles/main.css'
 import App from '@/App.vue'
 import router from '@/router'
+import { applyDesktopApiBase } from '@/api/http'
 
 const app = createApp(App)
 
@@ -18,4 +19,8 @@ for (const [name, component] of Object.entries(ElementPlusIconsVue)) {
 app.use(createPinia())
 app.use(router)
 app.use(ElementPlus, { locale: zhCn })
-app.mount('#app')
+
+// 桌面端先把接口地址问清楚（可以指向别的服务器），再挂载，避免首个请求发错地方
+applyDesktopApiBase().finally(() => {
+  app.mount('#app')
+})

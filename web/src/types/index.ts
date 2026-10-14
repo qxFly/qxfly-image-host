@@ -18,7 +18,10 @@ export interface UserVO {
   username: string
   nickname?: string
   email?: string
+  /** SUPER_ADMIN（超级管理员，只能由数据库赋予）| USER（普通用户，仅能浏览查看下载） */
   role: string
+  /** 角色的中文名 */
+  roleLabel?: string
   status: number
   createdAt?: string
 }
@@ -65,6 +68,41 @@ export interface StorageConfigVO {
   updatedAt?: string
 }
 
+/** 取链接的用途：复制 / 复制 Markdown / 下载 */
+export type LinkMode = 'copy' | 'markdown' | 'download'
+
+/** 存储配置的一条 CDN 线路 */
+export interface CdnVO {
+  key: string
+  name: string
+  /** 前缀模板（可能含 {owner} / {repo} / {branch} 占位符） */
+  template: string
+  /** 用样例对象键拼出来的真实地址，用来测速 */
+  example?: string | null
+  /** 是否是原始地址（存储后端直链） */
+  origin: boolean
+  builtin: boolean
+  enabled: boolean
+  previewDefault: boolean
+  downloadDefault: boolean
+  copyDefault: boolean
+}
+
+/** 一张图片可用的一种链接 */
+export interface ImageLinkVO {
+  key: string
+  name: string
+  url?: string | null
+  markdown?: string | null
+  origin: boolean
+  /** 服务端代理下载（url 为空，走下载接口） */
+  proxy: boolean
+  builtin: boolean
+  previewDefault: boolean
+  downloadDefault: boolean
+  copyDefault: boolean
+}
+
 export interface DirectoryNodeVO {
   path: string
   name: string
@@ -87,6 +125,12 @@ export interface ImageVO {
   directory: string
   depth: number
   url: string
+  /** 预览地址（按「预览默认 CDN」解析，未配置就是 url） */
+  previewUrl?: string
+  /** 下载地址（按「下载默认 CDN」解析） */
+  downloadUrl?: string
+  /** 复制链接用的地址（按「复制默认 CDN」解析） */
+  copyUrl?: string
   thumbUrl?: string
   mimeType: string
   size: number
@@ -97,6 +141,10 @@ export interface ImageVO {
   storageConfigId: number
   storageConfigName?: string
   createdAt: string
+  /** 移入回收站的时间，正常图片为 null */
+  deletedAt?: string | null
+  /** 在回收站目录里的对象键；为空说明云端文件还留在原位 */
+  trashKey?: string | null
   markdown: string
 }
 
@@ -170,7 +218,66 @@ export interface SystemInfo {
   name: string
   version: string
   storageTypes: string[]
+  /** 单张文件大小上限（字节）；-1 表示无上限 */
   maxUploadSize: number
+  /** 上限的可读文案，例如「30.0 MB」「无上限」 */
+  maxUploadSizeText: string
+  unlimitedUploadSize: boolean
   allowedExtensions: string[]
   dedupeEnabled: boolean
+  pathShardSize?: number
+  importMaxFiles?: number
+  migrateConcurrency?: number
+}
+
+export interface StatsVO {
+  totalCount: number
+  totalSize: number
+  todayCount: number
+  weekCount: number
+  maxSize: number
+  storageConfigCount: number
+  trashCount: number
+  trashSize: number
+  duplicateGroups: number
+  duplicateWastedSize: number
+  shareCount: number
+  shareViews: number
+  typeDistribution: { name: string; label: string; value: number }[]
+  recent: ImageVO[]
+}
+
+export interface AuditLogVO {
+  id: number
+  userId?: number
+  username?: string
+  action: string
+  targetType?: string
+  targetId?: string
+  detail?: string
+  success: number
+  ip?: string
+  userAgent?: string
+  createdAt: string
+}
+
+export interface SettingsVO {
+  /** 单张文件大小上限（字节）；-1 表示无上限 */
+  maxUploadSize: number
+  maxUploadSizeText: string
+  unlimitedUploadSize: boolean
+  /** 数据库里没设置过时用的出厂默认值（字节） */
+  defaultMaxUploadSize: number
+  /** 设置值本身的允许上限（字节） */
+  maxUploadSizeLimit: number
+  /** 登录失败几次后锁定 */
+  loginMaxAttempts: number
+  /** 锁定时长（分钟） */
+  loginLockMinutes: number
+  /** 防盗链开关 */
+  hotlinkEnabled: boolean
+  /** 防盗链白名单（逗号分隔） */
+  hotlinkDomains: string
+  /** 没有 Referer 时是否放行 */
+  hotlinkAllowEmpty: boolean
 }

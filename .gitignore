@@ -31,6 +31,10 @@ logs/
 .env.local
 uploads/
 
+# ---- 缩略图磁盘缓存 ----
+thumbs/
+server/thumbs/
+
 # ---- 便携运行时与打包产物（体积大，不入库）----
 runtime/
 dist/

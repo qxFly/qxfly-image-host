@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    PicHost 数据库管家：把本机 MySQL 注册成 Windows 服务，并支持用 cmd 启停、设开机自启、配置 PATH、初始化业务库。
+    qxfly-image-host 数据库管家：把本机 MySQL 注册成 Windows 服务，并支持用 cmd 启停、设开机自启、配置 PATH、初始化业务库。
 
 .DESCRIPTION
     默认安装位置：C:\Program Files\MySQL\MySQL Server 8.0
@@ -168,7 +168,7 @@ function Read-EnvFile {
 function Show-Status {
     Write-Host ''
     Write-Host '  ============================================================' -ForegroundColor DarkCyan
-    Write-Host '     PicHost 数据库状态' -ForegroundColor White
+    Write-Host '     qxfly-image-host 数据库状态' -ForegroundColor White
     Write-Host '  ============================================================' -ForegroundColor DarkCyan
 
     if ($MySql.Home) { Write-Host ('  安装目录 : ' + $MySql.Home) -ForegroundColor Gray }
@@ -383,7 +383,7 @@ function Invoke-Init {
     if ($NoCreate) { $finalUser = $User; $finalPassword = $Password }
 
     $lines = @(
-        '# PicHost 数据库连接配置（由 mysql-service.ps1 生成，已被 .gitignore 忽略）',
+        '# qxfly-image-host 数据库连接配置（由 mysql-service.ps1 生成，已被 .gitignore 忽略）',
         'MYSQL_HOST=127.0.0.1',
         'MYSQL_PORT=3306',
         ('MYSQL_DATABASE=' + $Database),

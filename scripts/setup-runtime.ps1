@@ -1,10 +1,10 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    下载并解压 PicHost 自带的便携运行时（JDK + Node），落盘到项目根目录 runtime/ 下。
+    下载并解压 qxfly-image-host 自带的便携运行时（JDK + Node），落盘到项目根目录 runtime/ 下。
 
 .DESCRIPTION
-    除数据库之外，PicHost 运行所需的环境全部放在 <项目根>/runtime/：
+    除数据库之外，qxfly-image-host 运行所需的环境全部放在 <项目根>/runtime/：
         runtime/win-x64/jdk      Windows 便携 JDK 17
         runtime/win-x64/node     Windows 便携 Node 20 LTS
         runtime/linux-x64/jdk    Ubuntu 便携 JDK 17
@@ -120,7 +120,7 @@ function Get-File {
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             $client = New-Object System.Net.WebClient
-            $client.Headers.Add('User-Agent', 'PicHost-Setup')
+            $client.Headers.Add('User-Agent', 'QxflyImageHost-Setup')
             $client.DownloadFile($url, $partial)
             $client.Dispose()
             $size = (Get-Item $partial).Length
@@ -181,7 +181,7 @@ function Expand-Artifact {
 # ---------------------------------------------------------------- 主流程
 Write-Host ''
 Write-Host '  ============================================================' -ForegroundColor DarkCyan
-Write-Host '     PicHost 便携运行时安装' -ForegroundColor White
+Write-Host '     qxfly-image-host 便携运行时安装' -ForegroundColor White
 Write-Host '  ============================================================' -ForegroundColor DarkCyan
 
 $targets = @()

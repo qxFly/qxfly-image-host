@@ -12,7 +12,7 @@
  * 对于同一台主机，只要失败过一次就记住并跳过缓存，避免每张图都白发一次请求。
  */
 
-const DB_NAME = 'pichost-image-cache'
+const DB_NAME = 'qxfly-image-host-cache'
 const DB_VERSION = 1
 const STORE = 'images'
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================
-#  PicHost 数据库管家（Ubuntu / Debian）
+#  qxfly-image-host 数据库管家（Ubuntu / Debian）
 #
 #  ./mysql.sh status                 查看服务状态与连接配置
 #  ./mysql.sh install                安装 MySQL 并设为开机自启
@@ -91,7 +91,7 @@ run_sql() {
 show_status() {
   echo
   printf '%s  ============================================================%s\n' "$C_CYAN" "$C_RESET"
-  printf '%s     PicHost 数据库状态（Linux）%s\n' "$C_WHITE" "$C_RESET"
+  printf '%s     qxfly-image-host 数据库状态（Linux）%s\n' "$C_WHITE" "$C_RESET"
   printf '%s  ============================================================%s\n' "$C_CYAN" "$C_RESET"
   printf '  服务名称 : %s\n' "$SERVICE"
   if systemctl list-unit-files "$SERVICE.service" >/dev/null 2>&1; then
@@ -192,7 +192,7 @@ do_init() {
 
   mkdir -p "$CONFIG_DIR"
   {
-    printf '# PicHost 数据库连接配置（由 mysql.sh 生成，已被 .gitignore 忽略）\n'
+    printf '# qxfly-image-host 数据库连接配置（由 mysql.sh 生成，已被 .gitignore 忽略）\n'
     printf 'MYSQL_HOST=127.0.0.1\n'
     printf 'MYSQL_PORT=3306\n'
     printf 'MYSQL_DATABASE=%s\n' "$DATABASE"

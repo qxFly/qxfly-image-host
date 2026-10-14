@@ -2,8 +2,8 @@
   <div class="page">
     <h2 class="page-title">个人中心</h2>
 
-    <el-row :gutter="16">
-      <el-col :span="14">
+    <el-row :gutter="isMobile ? 0 : 16">
+      <el-col :xs="24" :md="14">
         <el-card shadow="never" style="margin-bottom: 16px">
           <template #header>基本资料</template>
           <el-form ref="profileFormRef" :model="profileForm" :rules="profileRules" label-width="90px">
@@ -41,7 +41,7 @@
         </el-card>
       </el-col>
 
-      <el-col :span="10">
+      <el-col :xs="24" :md="10">
         <el-card shadow="never">
           <template #header>系统信息</template>
           <el-descriptions :column="1" border size="small">
@@ -59,7 +59,7 @@
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="单张上限">
-              {{ systemInfo ? formatSize(systemInfo.maxUploadSize) : '-' }}
+              {{ systemInfo ? systemInfo.maxUploadSizeText : '-' }}
             </el-descriptions-item>
             <el-descriptions-item label="允许格式">
               {{ systemInfo ? systemInfo.allowedExtensions.join(' / ') : '-' }}
@@ -95,7 +95,8 @@
           </el-button>
         </el-card>
 
-        <el-card shadow="never" style="margin-top: 16px">
+        <!-- 临时工具走的是管理类接口，普通用户看不到 -->
+        <el-card v-if="auth.isSuperAdmin" shadow="never" style="margin-top: 16px">
           <template #header>
             <div class="toolbar" style="margin: 0">
               <span>临时工具</span>
@@ -117,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import { useIsMobile } from '@/utils/responsive'
 import RepoMoveDialog from '@/components/RepoMoveDialog.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
@@ -128,6 +130,7 @@ import { formatSize } from '@/utils/format'
 import type { SystemInfo } from '@/types'
 
 const auth = useAuthStore()
+const isMobile = useIsMobile()
 const systemInfo = ref<SystemInfo | null>(null)
 const cacheInfo = ref({ entries: 0, bytes: 0, supported: true })
 const repoMoveVisible = ref(false)

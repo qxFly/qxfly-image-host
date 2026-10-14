@@ -11,11 +11,11 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.pichost</groupId>
-    <artifactId>pichost-server</artifactId>
+    <groupId>com.qxfly.imagehost</groupId>
+    <artifactId>qxfly-image-host</artifactId>
     <version>0.1.0</version>
-    <name>pichost-server</name>
-    <description>PicHost 图床管理 - 后端服务 (Spring Boot 3 + MyBatis-Plus + MySQL)</description>
+    <name>qxfly-image-host</name>
+    <description>qxfly-image-host 图床管理 - 后端服务 (Spring Boot 3 + MyBatis-Plus + MySQL)</description>
 
     <properties>
         <java.version>17</java.version>
@@ -203,7 +203,7 @@
     </profiles>
 
     <build>
-        <finalName>pichost-server</finalName>
+        <finalName>qxfly-image-host</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

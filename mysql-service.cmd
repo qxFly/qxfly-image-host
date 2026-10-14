@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 
-rem PicHost 数据库管家（Windows）
+rem qxfly-image-host 数据库管家（Windows）
 rem   mysql-service.cmd status            查看服务状态
 rem   mysql-service.cmd install           注册服务 + 开机自启
 rem   mysql-service.cmd start|stop|restart

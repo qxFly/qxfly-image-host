@@ -1,6 +1,6 @@
-# PicHost API 文档
+# qxfly-image-host API 文档
 
-Base URL：`http://127.0.0.1:8080`
+Base URL：`http://127.0.0.1:8080`（端口可改：`config/local.env` 里的 `BACKEND_PORT`，或 `start.ps1 -BackendPort 8081`）
 所有业务接口都以 `/api` 开头。
 
 ## 通用约定
@@ -32,6 +32,22 @@ Base URL：`http://127.0.0.1:8080`
 Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 ```
 
+### 角色与权限
+
+系统只有两个角色：
+
+| 角色 | 说明 | 权限 |
+| --- | --- | --- |
+| `SUPER_ADMIN` | 超级管理员 | 全部接口 |
+| `USER` | 普通用户 | 浏览 / 查看 / 下载，以及 `/api/auth` 下的个人资料与改密 |
+
+- 管理类接口（上传、删除、迁移、导入、存储配置增删改、账号管理）对普通用户返回
+  `401`（未登录）或 `403 / "该操作仅超级管理员可用"`
+- **超级管理员只能通过数据库赋予**，没有任何接口可以修改角色：
+  `UPDATE sys_user SET role = 'SUPER_ADMIN' WHERE username = 'xxx';`
+- 鉴权时**以数据库为准**（每次请求都会回库确认账号存在、未禁用、并取最新角色），
+  所以改库提权 / 降权 / 禁用立即生效，不需要重新登录
+
 ## 认证
 
 ### POST /api/auth/login
@@ -51,11 +67,24 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 
 ### POST /api/auth/register
 
+创建**普通用户**账号（角色固定为 `USER`，请求体里没有也不需要 roles 字段）。
+
 ```json
 { "username": "alice", "password": "123456", "nickname": "Alice", "email": "a@b.com" }
 ```
 
 用户名规则：3-32 位字母、数字、下划线或短横线。
+
+默认情况下该接口**仅超级管理员可用**（用于建账号）；把 `REGISTER_ENABLED=true` 打开后匿名也能调用，
+注册出来同样是普通用户。
+
+### GET /api/auth/register-enabled
+
+免鉴权。登录页据此决定要不要显示「注册」入口。
+
+```json
+{ "enabled": false }
+```
 
 ### GET /api/auth/me
 
@@ -73,6 +102,160 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 { "oldPassword": "admin123", "newPassword": "newpass123" }
 ```
 
+## CDN 线路
+
+> 整段都在 `/api/storage-configs/**` 下，**仅超级管理员**可访问。
+> 图片列表里的 `previewUrl / downloadUrl / copyUrl` 由服务端按这里配置的默认线路解析好再返回，
+> 普通用户不需要（也不能）读这些接口。
+
+每个存储配置可以有多条线路：
+
+- **内置预设**：按存储类型生成。GitHub contents 模式提供 `gh-proxy` / `ghproxy` / `jsdelivr-cf` / `jsdelivr`；
+  其他类型（含本地存储）只有 `origin` —— 它们的原始地址本身就是可直连的访问地址
+- **自定义**：名称 + 地址前缀，前缀支持 `{owner}` / `{repo}` / `{branch}` 占位符
+- `origin` 是保留 key，表示存储后端的原始直链，永远存在、不可删除
+
+### GET /api/storage-configs/{id}/cdns
+
+```json
+[
+  {
+    "key": "origin",
+    "name": "原始地址（存储后端直链）",
+    "template": "",
+    "example": "https://raw.githubusercontent.com/owner/repo/main/api/images/2026/10/13/001/a.png",
+    "origin": true,
+    "builtin": true,
+    "enabled": true,
+    "previewDefault": true,
+    "downloadDefault": true,
+    "copyDefault": false
+  },
+  {
+    "key": "jsdelivr",
+    "name": "jsDelivr（全球加速）",
+    "template": "https://cdn.jsdelivr.net/gh/owner/repo@main",
+    "example": "https://cdn.jsdelivr.net/gh/owner/repo@main/api/images/2026/10/13/001/a.png",
+    "origin": false,
+    "builtin": true,
+    "enabled": true,
+    "previewDefault": false,
+    "downloadDefault": false,
+    "copyDefault": true
+  }
+]
+```
+
+`example` 是用该配置下最近一张图片的对象键拼出来的真实地址，前端直接拿它测延时。
+
+### POST /api/storage-configs/{id}/cdns
+
+新增自定义线路（最多 20 条）。
+
+```json
+{ "name": "我的加速域名", "template": "https://cdn.example.com/{owner}", "enabled": true }
+```
+
+地址前缀必须以 `http://` 或 `https://` 开头。返回更新后的完整线路列表。
+
+### PUT /api/storage-configs/{id}/cdns/{key}
+
+修改自定义线路（内置预设不可修改，只能调整「默认」）。请求体同上。
+
+### DELETE /api/storage-configs/{id}/cdns/{key}
+
+删除自定义线路。如果它正好是某个用途的默认线路，该用途会自动回退到 `origin`。
+
+### PUT /api/storage-configs/{id}/cdns/defaults
+
+设置三个用途各自的默认线路；值为线路 key，`null` 或 `origin` 表示原始地址。
+
+```json
+{ "preview": "jsdelivr", "download": null, "copy": "jsdelivr" }
+```
+
+## 账号管理
+
+> 整个 `/api/users/**` 仅超级管理员可访问；普通用户调用返回 `403`。
+> 这里没有「修改角色」的接口 —— 新建的账号一律是普通用户，超级管理员只能改数据库赋予。
+
+### GET /api/users
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| page | 1 | 页码 |
+| size | 20 | 每页条数（上限 200） |
+| keyword | - | 按用户名或昵称模糊筛选 |
+
+```json
+{
+  "total": 3,
+  "page": 1,
+  "size": 20,
+  "pages": 1,
+  "records": [
+    {
+      "id": 1,
+      "username": "admin",
+      "nickname": "超级管理员",
+      "email": null,
+      "role": "SUPER_ADMIN",
+      "roleLabel": "超级管理员",
+      "status": 1,
+      "createdAt": "2026-10-13T14:18:03"
+    }
+  ]
+}
+```
+
+### POST /api/users
+
+新建账号，**角色固定为普通用户**。
+
+```json
+{ "username": "alice", "password": "123456", "nickname": "Alice", "email": "a@b.com" }
+```
+
+### PUT /api/users/{id}
+
+修改账号资料（昵称 / 邮箱）。用户名是登录凭据、角色只能改数据库，所以这两个字段不在请求体里。
+
+```json
+{ "nickname": "新昵称", "email": "new@example.com" }
+```
+
+- 昵称留空则回退成用户名
+- 超级管理员的账号不能在这里修改：`403 超级管理员的资料请他自己在「个人中心」修改`
+
+### PUT /api/users/{id}/status
+
+启用 / 禁用账号。禁用后该账号手上的 token **立即失效**。
+
+```json
+{ "status": 0 }
+```
+
+- 不能修改超级管理员账号：`403 超级管理员的账号不能在这里修改`
+- 不能禁用自己：`400 不能禁用当前登录的账号`
+
+### PUT /api/users/{id}/password
+
+重置密码。
+
+```json
+{ "newPassword": "newpass123" }
+```
+
+超级管理员账号不能在这里重置，需在「个人中心」或数据库里改。
+
+### DELETE /api/users/{id}
+
+删除账号。以下情况会被拒绝（业务错误码 `403` / `400`）：
+
+- 目标是超级管理员：`超级管理员的账号不能删除`
+- 目标是当前登录账号：`不能删除当前登录的账号`
+- 该账号名下还有图片：`该账号名下还有 N 张图片，先清理或迁移后再删除`
+
 ## 存储配置
 
 ### GET /api/storage-configs/types
@@ -81,6 +264,17 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 
 ```json
 [
+  {
+    "name": "LOCAL",
+    "label": "本地存储",
+    "shortLabel": "本机磁盘",
+    "description": "把图片保存在运行本服务的这台机器上，由本服务直接提供访问地址（/files/...）……",
+    "fields": [
+      { "key": "baseDir", "label": "存储目录", "type": "text", "required": false, "secret": false, "defaultValue": "uploads", "options": [], "help": "绝对路径或相对服务进程工作目录的路径" },
+      { "key": "publicBaseUrl", "label": "对外访问前缀", "type": "text", "required": false, "secret": false, "defaultValue": "", "options": [], "help": "留空则自动使用访问本服务所用的地址" },
+      { "key": "pathPrefix", "label": "路径前缀", "type": "text", "required": false, "secret": false, "defaultValue": "images", "options": [], "help": "图片存放的目录前缀" }
+    ]
+  },
   {
     "name": "GITHUB",
     "label": "GitHub",
@@ -196,6 +390,14 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 
 ## 图片
 
+> 从本节开始：**浏览 / 查看 / 下载类接口对所有登录用户开放**（`GET /api/images`、`/api/images/{id}`、
+> `/api/images/directories`、`/api/images/stats`、`/api/images/{id}/download`、`POST /api/images/download/batch`），
+> 其余**写操作**（上传、删除、迁移、导入、仓库工具）都**只有超级管理员**能调用，普通用户返回 403。
+>
+> **可见范围**：图片按账号存在 `image_file.user_id` 上。超级管理员看到自己名下的图片；
+> 普通用户是只读账号、自己又不能上传，所以看到的是**超级管理员名下的图库**（系统图库），
+> 下载时用图片所属账号的存储配置取内容（`GET /api/storage-configs` 对普通用户仍只返回他自己的配置，通常是空列表）。
+
 ### POST /api/images/upload
 
 `multipart/form-data`
@@ -213,6 +415,9 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
   "originalName": "demo.png",
   "objectKey": "images/2026/01/01/fb32e615790743309e2800e6d0afdc0e.png",
   "url": "http://127.0.0.1:9000/pichost/images/2026/01/01/fb32e615790743309e2800e6d0afdc0e.png",
+  "previewUrl": "http://127.0.0.1:9000/pichost/images/2026/01/01/fb32e615790743309e2800e6d0afdc0e.png",
+  "downloadUrl": "http://127.0.0.1:9000/pichost/images/2026/01/01/fb32e615790743309e2800e6d0afdc0e.png",
+  "copyUrl": "http://127.0.0.1:9000/pichost/images/2026/01/01/fb32e615790743309e2800e6d0afdc0e.png",
   "thumbUrl": null,
   "mimeType": "image/png",
   "size": 70,
@@ -226,6 +431,10 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
   "markdown": "![demo.png](http://...)"
 }
 ```
+
+- `url` 恒为存储后端的原始直链，`markdown` 用的也是它
+- `previewUrl / downloadUrl / copyUrl` 是按「存储设置 → CDN 线路」里配置的三个默认线路解析出来的地址；
+  没配置线路时三者都等于 `url`。缩略图 / 预览用 `previewUrl`，复制用 `copyUrl`，下载用 `downloadUrl`
 
 同一用户重复上传**相同内容**时会命中秒传，直接返回已有记录（`UPLOAD_DEDUPE=true` 时生效）。
 
@@ -286,8 +495,135 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 
 ### DELETE /api/images/{id}
 
-先调用对应存储后端删除云端对象，再删除本地记录。
-若云端删除失败（例如 ImgBB 官方 API 不支持删除），会记录告警日志但**仍然清理本地记录**。
+**删除 = 移入回收站**（逻辑删除）：数据库打删除标记，**仓库里的文件也会被搬进回收站目录**
+（默认 `_trash/`，例如 `api/images/2026/10/13/001/x.png` → `_trash/api/images/2026/10/13/001/x.png`）。
+所以列表 / 目录树 / 统计 / 详情 / 下载都不再包含它，但可以从回收站恢复。真正的物理删除在回收站里做。
+
+- 搬运走的是 GitHub 的**仓库内引用式搬移**（复用原有 blob 的 SHA），不下载不上传，一次搬运只多一个提交
+- 只有 GitHub contents 模式支持；其他后端退化为「只打标记、文件原地保留」
+- 记录里会多一个 `trashKey` 字段记录文件在回收站目录里的位置
+
+### POST /api/images/delete/batch
+
+**批量删除**（仅超级管理员）= 批量移入回收站，与单张 `DELETE /api/images/{id}` 语义完全相同。
+
+```json
+{ "imageIds": [128, 129] }
+```
+
+- 返回移入回收站的张数（`data` 为数字）
+- 云端文件逐个搬进回收站目录（GitHub contents 模式引用式搬移零流量；其他后端退化为只打标记）
+- **要么全成功、要么整体报错**：`imageIds` 里只要有一个不存在 / 已在回收站 / 不属于你，
+  就返回 `404` 并提示有几张找不到，一张也不会删 —— 刷新列表后重试即可
+- 重复提交同一个 id 不会重复删除（已在回收站里的查不出来，直接计入上面的「找不到」）
+
+### GET /api/images/trash
+
+回收站列表（仅超级管理员）。
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| page | 1 | 页码 |
+| size | 30 | 每页条数（上限 500） |
+| keyword | - | 按文件名或对象键模糊筛选 |
+
+返回结构与 `GET /api/images` 相同，记录里多了两个字段：
+
+- `deletedAt`：移入回收站的时间
+- `trashKey`：文件在回收站目录里的对象键；为 `null` 表示云端文件还留在原位（非 GitHub 后端，或搬运失败）
+
+### POST /api/images/trash/restore
+
+从回收站恢复（仅超级管理员）。
+
+```json
+{ "imageIds": [128, 129] }
+```
+
+返回恢复的张数（`data` 为数字）。恢复会先把云端文件从回收站目录搬回原位置（同样零流量），
+全都搬成功了才改数据库；只要有搬不回来的就整体不恢复并报错，避免「数据库说恢复了、文件还在回收站目录」的错位状态。
+搬运是幂等的，失败后重试即可。
+
+### POST /api/images/trash/delete
+
+**彻底删除**（仅超级管理员）：先调用存储后端删掉云端对象，再删本地记录，**不可恢复**。
+
+```json
+{ "imageIds": [128, 129] }
+```
+
+- 返回彻底删除的张数
+- 删除的是文件**实际所在的位置**：搬进回收站目录的删 `trashKey`，没搬过的删原对象键
+- 云端删除失败（例如 ImgBB 官方 API 不支持删除）只记告警日志，本地记录**仍会清理**，
+  避免留下「本地没了、云端还在」的孤儿文件
+- 只能删回收站里的图片；不在回收站里的 id 会被忽略，全都找不到时返回 `404`
+
+### POST /api/images/trash/clear
+
+清空回收站（仅超级管理员），把回收站里的图片全部彻底删除，返回删除的张数。
+
+### GET /api/images/{id}/links
+
+这张图可用的全部链接，供「选择复制哪种链接」的弹窗使用（连通性与延时由前端自己测）。
+
+```json
+[
+  { "key": "origin", "name": "原始地址（存储后端直链）", "url": "https://raw.githubusercontent.com/...", "origin": true, "builtin": true, "copyDefault": false },
+  { "key": "jsdelivr", "name": "jsDelivr（全球加速）", "url": "https://cdn.jsdelivr.net/gh/...", "builtin": true, "copyDefault": true },
+  { "key": "proxy", "name": "原站代理下载（需登录，支持私有存储）", "proxy": true, "builtin": true }
+]
+```
+
+- 每个条目都带 `markdown`（`![文件名](地址)`）
+- `origin = true` 表示存储后端的原始直链
+- `proxy = true` 表示服务端代理下载：`url` 为空，前端调用 `GET /api/images/{id}/download`
+- 三个 `*Default` 标记对应「设置 → CDN 线路」里选的默认线路
+
+### GET /api/images/{id}/download
+
+下载单张原图。**响应不是 JSON，而是文件流**：`Content-Type` 为该图片的 MIME 类型，
+`Content-Disposition: attachment` 给出原文件名（同时带 RFC 5987 写法，中文名不乱码）。
+
+内容由服务端代理取回，所以私有仓库 / 私有桶里的图片也能下载，浏览器端也不用处理跨域：
+
+```bash
+curl -H "Authorization: Bearer <token>" -o out.png \
+  http://127.0.0.1:8080/api/images/128/download
+```
+
+失败时仍按统一结构返回 JSON（`code != 200`）。
+
+### GET /files/{配置ID}/{对象键}
+
+**本地存储（```LOCAL```）的公开直链**，也就是浏览器的 `<img src>` 直接访问的那个地址。
+
+- **匿名可访问**（不在 `/api` 下）：`<img>` 请求带不上 JWT，其他后端（GitHub raw / OSS / jsDelivr）的直链同样是公开的；对象键里有随机 uuid
+- 响应是文件流：`Content-Type` 按扩展名给出（`image/png` 等，不带 charset 尾巴），
+  并带 `Cache-Control: max-age=604800, public`（对象键含 uuid、内容不会变，可放心缓存）
+- 找不到配置 / 类型不是本地存储 / 文件不存在 / 对象键越界（如 ```../```）都返回 **404**
+- 其他后端不走这个端点：它们的直链是各自的公网地址
+
+```bash
+curl -o out.png http://127.0.0.1:8080/files/24/images/2026/10/13/001/f30a8554109449ffb0b89cd6c7e39e0e.png
+```
+
+### POST /api/images/download/batch
+
+把选中的图片打包成一个 zip 流式返回（`Content-Type: application/zip`，
+响应头 `X-Image-Count` 是本包的图片数量）。
+
+```json
+// 请求
+{ "imageIds": [128, 129, 130] }
+```
+
+- 一次最多 **500** 张，超出直接报错
+- 有任何一张不存在或不属于当前用户时，整包不生成、直接返回 404，
+  避免用户拿到一个「悄悄少了几张」的压缩包
+- 包内条目名用图片的**原始文件名**；重名自动追加 `-1`、`-2`，
+  路径分隔符等非法字符会被替换掉（避免解压时写到目标目录外面）
+- 单张取回失败**不会中断整包**，失败的文件会列在包内的 `下载失败清单.txt` 里
+- 服务端「边取边写」，内存里最多只放一张图，几百张也不会把服务端撑爆
 
 ### GET /api/images/stats
 
@@ -398,7 +734,7 @@ Authorization: Bearer eyJhbGciOiJIUzM4NCJ9...
 ```
 
 该接口只登记元数据，不会下载或重新上传文件；导入的记录没有 sha256 与宽高，因此不参与秒传。
-存储类型不支持列举时返回 code = 400 并说明原因（目前支持 GitHub 与 S3 兼容存储）。
+存储类型不支持列举时返回 code = 400 并说明原因（目前支持 GitHub、S3 兼容存储与本地存储）。
 
 ## 批量迁移
 
@@ -558,7 +894,7 @@ PATCH /git/refs/heads/{branch}          移动分支引用
   { "name": "Token 有效性", "ok": true, "detail": "登录身份 qxFly" },
   { "name": "仓库写权限", "ok": true, "detail": "有 push 权限  默认分支 = main  私有 = false" },
   { "name": "分支 main", "ok": true, "detail": "HEAD = 4970e9b5" },
-  { "name": "最近提交", "ok": true, "detail": "没发现本工具创建的提交；4970e9b5 chore(pichost): upload …" },
+  { "name": "最近提交", "ok": true, "detail": "没发现本工具创建的提交；4970e9b5 chore(qxfly-image-host): upload …" },
   { "name": "文件树", "ok": true, "detail": "文件总数 6257  截断 = false  以 [api/] 开头的 6255  其中符合条件的图片 4979" },
   { "name": "API 配额", "ok": true, "detail": "剩余 5000 / 5000" },
   { "name": "本次将移动", "ok": true, "detail": "可移动 4979 个，重名跳过 0 个；示例 api/1.png -> api/images/1.png" }
@@ -665,20 +1001,153 @@ PATCH /git/refs/heads/{branch}          移动分支引用
 - 每组的保留项优先选图库里已有记录的那一份；被删文件的库记录，若保留项没有记录就改写过去，否则删除
 - `orphanSuffixed` 是带 `-N` 后缀但没有同名基名的数量，默认不删（可能是唯一的图）
 
+## 缩略图
+
+### GET /thumb/{id}?w={宽度}&s={签名}
+
+**匿名可访问**的按需缩略图（`<img>` 带不上 JWT）。签名是 HMAC-SHA256(密钥, `id:宽度`) 的前 32 位十六进制，
+稳定不变因此可以长期缓存；签名不对返回 **403**（防止按自增 id 枚举全站图片）。
+
+- `w` 允许 32 ~ 1600，缺省用 ```app.thumb.default-width```（400）
+- 响应带 `Cache-Control: max-age=2592000, public`，Content-Type 为 `image/jpeg`（带透明通道的是 `image/png`）
+- 图片不存在 / 在回收站 / 格式解不了（SVG、WebP）/ 原图超过 ```app.thumb.max-source-size``` → **404**，前端应退回原图地址
+- 图库接口返回的 `thumbUrl` 就是这个地址；已有原生缩略图的后端（SM.MS / ImgBB）直接用它们自己的地址
+
+## 分享链接
+
+### POST /api/shares（仅超级管理员）
+
+```json
+{ "title": "国庆照片", "imageIds": [128, 129], "password": "可留空", "expiresInDays": 7 }
+```
+
+返回 `{ token, url: "/#/s/{token}", passwordProtected, expiresAt, imageCount, viewCount, ... }`。
+只能分享自己可见的图片，一个分享最多 2000 张。
+
+### GET /api/shares ・ DELETE /api/shares/{id}
+
+列出 / 撤销自己创建的分享（撤销后链接立刻失效）。
+
+### POST /api/shares/{token}/view —— **公开**
+
+相册的公开入口，**不需要登录**。需要密码的相册把密码放在请求体里：
+
+```json
+{ "password": "xxxx" }
+```
+
+| 情况 | 返回 |
+| --- | --- |
+| 正常 | `200` + `{ title, viewCount, images: [ImageVO...] }`（浏览数 +1） |
+| token 不存在 / 已撤销 | `code = 404` |
+| 已关闭 / 已过期 | `code = 403`（提示里带过期日期） |
+| 需要密码但没给 / 密码错 | `code = 403` |
+
+## 重复图片
+
+### GET /api/images/duplicates?page=&size=（仅超级管理员）
+
+```json
+{
+  "total": 3, "wastedSize": 1048576, "page": 1, "size": 20, "pages": 1,
+  "groups": [ { "hash": "...", "count": 2, "totalSize": 2048,
+                "images": [ { "id": 1, "url": "...", "keep": true }, { "id": 2, "keep": false } ] } ]
+}
+```
+
+### DELETE /api/images/duplicates?hash={可选}
+
+清理：每组保留**最早**的一张，其余**移入回收站**（不是物理删除），返回移入的张数。
+不带 `hash` 表示清理全部组。
+
+## 审计日志
+
+### GET /api/audit-logs?page=&size=&keyword=&action=&success=（仅超级管理员）
+
+```json
+{ "total": 128, "page": 1, "size": 50, "pages": 3,
+  "records": [ { "id": 128, "username": "admin", "action": "LOGIN", "success": 1,
+                 "targetType": "USER", "targetId": "1", "detail": "登录成功",
+                 "ip": "127.0.0.1", "userAgent": "...", "createdAt": "..." } ] }
+```
+
+动作码：```LOGIN / LOGIN_FAILED / LOGIN_LOCKED / UPLOAD / TRASH_MOVE / TRASH_RESTORE / IMAGE_PURGE / TRASH_CLEAR /
+USER_CREATE / USER_UPDATE / USER_STATUS / USER_PASSWORD / USER_DELETE / STORAGE_CREATE / STORAGE_UPDATE /
+STORAGE_DELETE / STORAGE_DEFAULT / SETTINGS_UPDATE / SHARE_CREATE / SHARE_DELETE```。
+读操作不记录；写入失败只打日志，不影响业务。
+
 ## 系统
 
 ### GET /api/system/info
 
+登录即可访问，前端用它渲染上传页的提示与预校验。
+
 ```json
 {
-  "name": "PicHost",
+  "name": "qxfly-image-host",
   "version": "0.1.0",
-  "storageTypes": ["GITHUB", "CLOUDFLARE_R2", "ALIYUN_OSS", "TENCENT_COS", "QINIU_KODO", "SMMS", "IMGBB", "S3_COMPATIBLE"],
+  "storageTypes": ["LOCAL", "GITHUB", "CLOUDFLARE_R2", "ALIYUN_OSS", "TENCENT_COS", "QINIU_KODO", "SMMS", "IMGBB", "S3_COMPATIBLE"],
   "maxUploadSize": 31457280,
+  "maxUploadSizeText": "30.0 MB",
+  "unlimitedUploadSize": false,
   "allowedExtensions": ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "avif", "tiff"],
   "dedupeEnabled": true
 }
 ```
+
+- `maxUploadSize` 是**单张文件大小上限（字节）**；`-1` 表示**无上限**，
+  展示时请用 `maxUploadSizeText`（"30.0 MB" / "无上限"），别直接格式化 -1
+- 这个值来自「系统设置」，可以随时改（见下），上传接口按改后的值判断
+
+### GET /api/settings
+
+读取系统设置。**仅超级管理员**（普通用户访问返回 403）；普通用户需要的上传上限走 `/api/system/info`。
+
+```json
+{
+  "maxUploadSize": 31457280,
+  "maxUploadSizeText": "30.0 MB",
+  "unlimitedUploadSize": false,
+  "defaultMaxUploadSize": 31457280,
+  "maxUploadSizeLimit": 1099511627776
+}
+```
+
+### PUT /api/settings
+
+改单张文件大小上限，**立即生效、不用重启**。两种提交方式：
+
+```json
+// 1) 设成具体大小（字节，必须 > 0，最大 1TB）
+{ "maxUploadSize": 104857600 }
+
+// 2) 设成无上限（此时 maxUploadSize 被忽略）
+{ "unlimitedUploadSize": true }
+
+// 3) 登录安全与防盗链（可只提交其中几项）
+{ "loginMaxAttempts": 5, "loginLockMinutes": 15,
+  "hotlinkEnabled": false, "hotlinkDomains": "a.com,b.com", "hotlinkAllowEmpty": true }
+```
+
+返回的 ' + B + 'data' + B + ' 里包含 ' + B + 'maxUploadSizeText' + B + '、' + B + 'loginMaxAttempts' + B + '、' + B + 'loginLockMinutes' + B + '、',
+B + 'hotlinkEnabled' + B + '、' + B + 'hotlinkDomains' + B + '、' + B + 'hotlinkAllowEmpty' + B + '。
+
+登录失败锁定的行为：同一账号连续失败达到 ' + B + 'loginMaxAttempts' + B + ' 次后锁定 ' + B + 'loginLockMinutes' + B + ' 分钟，',
+'期间即使密码正确也返回 ' + B + '403' + B + '（提示还剩几分钟）；计数在内存里，重启清空；',
+'失败与锁定都会写进审计日志。
+
+返回更新后的设置快照（同 GET）。下面是失败场景：
+
+| 请求 | 结果 |
+| --- | --- |
+| `{ "maxUploadSize": 0 }` | `400` 上限必须大于 0；要取消限制请打开「无上限」 |
+| `{}` | `400` 请填写单张文件大小上限，或打开「无上限」 |
+| `{ "maxUploadSize": 9999999999999 }` | `400` 上限过大（最大 1.0 TB） |
+| 普通用户调用 | `403` |
+
+> 「无上限」时 Servlet 层的 multipart 硬上限也必须放开（默认 `spring.servlet.multipart.max-file-size: -1`），
+> 限制只在应用层判断；需要服务端兜底时用环境变量 `UPLOAD_SERVLET_MAX`（例如 `2GB`）。
+> 超过 Servlet 硬上限的请求由 `MaxUploadSizeExceededException` 处理器返回 `code = 413`。
 
 ### GET /actuator/health
 

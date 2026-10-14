@@ -1,9 +1,9 @@
 {
-  "name": "pichost-web",
+  "name": "qxfly-image-host-web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "PicHost 图床管理 - Vue3 浏览器端 / Tauri2 桌面端前端",
+  "description": "qxfly-image-host 图床管理 - Vue3 浏览器端 / Tauri2 桌面端前端",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

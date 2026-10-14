@@ -12,9 +12,9 @@ struct AppInfo {
 #[tauri::command]
 fn app_info() -> AppInfo {
     AppInfo {
-        name: "PicHost",
+        name: "qxfly-image-host",
         version: env!("CARGO_PKG_VERSION"),
-        api_base: std::env::var("PICHOST_API_BASE")
+        api_base: std::env::var("QXFLY_IMAGE_HOST_API_BASE")
             .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
         desktop: true,
     }
@@ -34,5 +34,5 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![app_info, startup_files])
         .run(tauri::generate_context!())
-        .expect("启动 PicHost 桌面端失败");
+        .expect("启动 qxfly-image-host 桌面端失败");
 }

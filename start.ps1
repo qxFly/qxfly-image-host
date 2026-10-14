@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    PicHost 一键启动（Windows / Windows PowerShell 5.1+）。
+    qxfly-image-host 一键启动（Windows / Windows PowerShell 5.1+）。
 
 .DESCRIPTION
     除数据库外，运行所需环境全部取自项目根目录 runtime\，不依赖系统预装的 JDK / Node：
@@ -21,6 +21,7 @@
     .\start.ps1 -Offline            # 禁止联网下载运行时
     .\start.ps1 -Action status      # 查看状态
     .\start.ps1 -Action stop        # 停止
+    .\start.ps1 -BackendPort 8081 -WebPort 5174   # 改端口（也可写进 config\local.env）
 #>
 [CmdletBinding()]
 param(
@@ -35,6 +36,10 @@ param(
 
     [ValidateSet('auto', 'mysql', 'h2')]
     [string]$Database = 'auto',
+
+    # 前后端端口；不传就读 config\local.env 里的 BACKEND_PORT / WEB_PORT，再不行用默认 8080 / 5173
+    [int]$BackendPort = 0,
+    [int]$WebPort = 0,
 
     [switch]$Rebuild,
     [switch]$NoBrowser,
@@ -52,11 +57,10 @@ $LogDir      = Join-Path $Root 'logs'
 $ConfigDir   = Join-Path $Root 'config'
 $RuntimeDir  = Join-Path $Root 'runtime'
 $EnvFile     = Join-Path $ConfigDir 'local.env'
-$BackendJar  = Join-Path $ServerDir 'target\pichost-server.jar'
-$BackendPort = 8080
-$WebPort     = 5173
-$HealthUrl   = 'http://127.0.0.1:8080/actuator/health'
-$WebUrl      = 'http://localhost:5173'
+$BackendJar  = Join-Path $ServerDir 'target\qxfly-image-host.jar'
+# 端口与访问地址在读完 config\local.env 之后由 Resolve-Ports 统一算出来
+$HealthUrl   = ''
+$WebUrl      = ''
 $IsWin       = ($env:OS -eq 'Windows_NT')
 
 $script:StartedPids = @()
@@ -66,7 +70,7 @@ $script:EffectiveDb = 'mysql'
 function Write-Banner {
     Write-Host ''
     Write-Host '  ============================================================' -ForegroundColor DarkCyan
-    Write-Host '     PicHost 多云端图床管理  ·  一键启动' -ForegroundColor White
+    Write-Host '     qxfly-image-host 多云端图床管理  ·  一键启动' -ForegroundColor White
     Write-Host '  ============================================================' -ForegroundColor DarkCyan
 }
 function Write-Step { param([string]$Text) Write-Host ('  [*] ' + $Text) -ForegroundColor Cyan }
@@ -143,6 +147,39 @@ function Import-LocalEnv {
         }
     }
     return $true
+}
+
+# 端口优先级：命令行参数 > config\local.env（BACKEND_PORT / WEB_PORT）> 内置默认
+function Resolve-PortValue {
+    param([int]$Explicit, [string]$EnvName, [int]$Fallback)
+    if ($Explicit -gt 0) { return $Explicit }
+    $text = [Environment]::GetEnvironmentVariable($EnvName, 'Process')
+    $parsed = 0
+    if ($text -and [int]::TryParse($text.Trim(), [ref]$parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
+        return $parsed
+    }
+    return $Fallback
+}
+
+function Resolve-Ports {
+    $script:BackendPort = Resolve-PortValue -Explicit $BackendPort -EnvName 'BACKEND_PORT' -Fallback 8080
+    $script:WebPort     = Resolve-PortValue -Explicit $WebPort -EnvName 'WEB_PORT' -Fallback 5173
+    $script:HealthUrl   = 'http://127.0.0.1:' + $script:BackendPort + '/actuator/health'
+    $script:WebUrl      = 'http://localhost:' + $script:WebPort
+    # 传给子进程：后端读 SERVER_PORT（application.yml），Vite 读 WEB_PORT / BACKEND_PORT（vite.config.ts）
+    [Environment]::SetEnvironmentVariable('SERVER_PORT', $script:BackendPort, 'Process')
+    [Environment]::SetEnvironmentVariable('BACKEND_PORT', $script:BackendPort, 'Process')
+    [Environment]::SetEnvironmentVariable('WEB_PORT', $script:WebPort, 'Process')
+}
+
+# JVM 参数：config\local.env 里的 JAVA_OPTS 优先，没写就用默认值。
+# 单张无上限时上传全程走流式，堆不用很大，但某些机器默认堆偏小，给个明确的默认值。
+function Resolve-JvmArgs {
+    $configured = [Environment]::GetEnvironmentVariable('JAVA_OPTS', 'Process')
+    if ([string]::IsNullOrWhiteSpace($configured)) {
+        $configured = '-Xms256m -Xmx1g -XX:+UseG1GC'
+    }
+    $script:JvmArgs = $configured.Trim()
 }
 
 # ---------------------------------------------------------------- 网络
@@ -392,9 +429,10 @@ function Start-Backend {
 
     if (Test-NeedRebuild) { Invoke-BackendBuild } else { Write-Ok '后端产物已是最新（源码无变更，跳过编译）' }
 
-    $javaArgs = @('-Dfile.encoding=UTF-8', '-jar', $BackendJar)
+    $jvmArray = @($script:JvmArgs -split '\s+' | Where-Object { $_ })
+    $javaArgs = $jvmArray + @('-Dfile.encoding=UTF-8', '-jar', $BackendJar)
     # Start-Process 的 -ArgumentList 不会自动加引号，jar 路径含空格时必须自己包好
-    $javaArgLine = '-Dfile.encoding=UTF-8 -jar "' + $BackendJar + '"'
+    $javaArgLine = $(if ($script:JvmArgs) { $script:JvmArgs + ' ' } else { '' }) + '-Dfile.encoding=UTF-8 -jar "' + $BackendJar + '"'
     if ($DbMode -eq 'h2') {
         $javaArgs += '--spring.profiles.active=h2'
         $javaArgLine += ' --spring.profiles.active=h2'
@@ -489,13 +527,13 @@ function Start-Frontend {
     Write-Step ('启动前端开发服务器（端口 ' + $WebPort + '）...')
     if (-not $Detached) {
         Push-Location $WebDir
-        try { Invoke-Native { & $script:NpmCmd run dev } } finally { Pop-Location }
+        try { Invoke-Native { & $script:NpmCmd run dev -- --port $WebPort } } finally { Pop-Location }
         return
     }
 
     $stdout = Join-Path $LogDir 'web.log'
     $stderr = Join-Path $LogDir 'web.err.log'
-    $proc = Start-Process -FilePath $script:NpmCmd -ArgumentList @('run', 'dev') -WorkingDirectory $WebDir -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $proc = Start-Process -FilePath $script:NpmCmd -ArgumentList @('run', 'dev', '--', '--port', "$WebPort") -WorkingDirectory $WebDir -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $script:StartedPids += $proc.Id
     Write-Info ('日志 : ' + $stdout)
 
@@ -561,7 +599,7 @@ function Show-Summary {
 Write-Banner
 
 if (-not (Test-Path (Join-Path $ServerDir 'pom.xml')) -or -not (Test-Path (Join-Path $WebDir 'package.json'))) {
-    Write-Fail ('当前目录不像是 PicHost 项目根目录：' + $Root)
+    Write-Fail ('当前目录不像是 qxfly-image-host 项目根目录：' + $Root)
     Write-Info '请把本脚本放在与 server、web 同级的位置后重试'
     exit 1
 }
@@ -577,6 +615,13 @@ Enable-Runtime -Runtime $Runtime
 $script:JavaExe = if ($Runtime.Java) { $Runtime.Java } else { 'java' }
 $script:NodeExe = if ($Runtime.NodeDir) { Join-Path $Runtime.NodeDir 'node.exe' } else { 'node' }
 $script:NpmCmd = if ($Runtime.NpmCmd) { $Runtime.NpmCmd } else { 'npm.cmd' }
+
+# 端口要在 status / stop / start 之前定好：命令行参数 > config\local.env > 默认
+if (Import-LocalEnv) { Write-Ok '已加载配置 config\local.env' }
+Resolve-Ports
+Resolve-JvmArgs
+Write-Info ('后端端口 ' + $BackendPort + '，前端端口 ' + $WebPort + '（改 config\local.env 或用 -BackendPort / -WebPort）')
+Write-Info ('JVM 参数 ' + $script:JvmArgs + '（config\local.env 里可用 JAVA_OPTS 覆盖）')
 
 if ($Action -eq 'status') {
     Show-Status
@@ -597,7 +642,6 @@ if ($Action -eq 'stop') {
 # ---------------- start / restart ----------------
 $DbMode = 'mysql'
 if ($Target -eq 'backend' -or $Target -eq 'all') {
-    if (Import-LocalEnv) { Write-Ok '已加载数据库配置 config\local.env' }
     Test-Prerequisites -Which 'backend' -Runtime $Runtime
     $DbMode = Resolve-DatabaseMode
 }

@@ -35,11 +35,12 @@
       <el-table-column label="更新时间" width="170">
         <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="300" fixed="right">
+      <el-table-column label="操作" width="350" :fixed="isMobile ? undefined : 'right'">
         <template #default="{ row }">
           <el-button size="small" link type="primary" :loading="testingId === row.id" @click="doTest(row)">
             测试
           </el-button>
+          <el-button size="small" link type="primary" @click="openCdn(row)">CDN</el-button>
           <el-button size="small" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" link type="primary" :disabled="row.isDefault" @click="markDefault(row)">
             设为默认
@@ -57,12 +58,15 @@
     </el-table>
 
     <StorageFormDialog v-model="dialogVisible" :types="types" :editing="editing" @saved="load" />
+    <StorageCdnDialog v-model="cdnVisible" :config="cdnConfig" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { useIsMobile } from '@/utils/responsive'
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import StorageCdnDialog from '@/components/StorageCdnDialog.vue'
 import StorageFormDialog from '@/components/StorageFormDialog.vue'
 import {
   deleteStorageConfig,
@@ -74,12 +78,15 @@ import {
 import { formatDate } from '@/utils/format'
 import type { StorageConfigVO, StorageTypeVO } from '@/types'
 
+const isMobile = useIsMobile()
 const loading = ref(false)
 const configs = ref<StorageConfigVO[]>([])
 const types = ref<StorageTypeVO[]>([])
 const dialogVisible = ref(false)
 const editing = ref<StorageConfigVO | null>(null)
 const testingId = ref<number | null>(null)
+const cdnVisible = ref(false)
+const cdnConfig = ref<StorageConfigVO | null>(null)
 
 async function load() {
   loading.value = true
@@ -95,6 +102,11 @@ async function load() {
 function openCreate() {
   editing.value = null
   dialogVisible.value = true
+}
+
+function openCdn(row: any) {
+  cdnConfig.value = row
+  cdnVisible.value = true
 }
 
 function openEdit(row: any) {

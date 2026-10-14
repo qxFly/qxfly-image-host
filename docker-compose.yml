@@ -1,4 +1,4 @@
-# PicHost 本地开发依赖：MySQL 8 + MinIO(S3 兼容存储)
+# qxfly-image-host 本地开发依赖：MySQL 8 + MinIO(S3 兼容存储)
 # 启动：docker compose up -d
 # 停止：docker compose down          （保留数据）
 # 清空：docker compose down -v       （删除数据卷）

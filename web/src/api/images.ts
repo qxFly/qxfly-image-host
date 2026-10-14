@@ -1,6 +1,7 @@
-import { del, get, post } from './http'
+import { del, get, getBlob, post, postBlob } from './http'
 import type {
   DirectoryTreeVO,
+  ImageLinkVO,
   ImageVO,
   ImportCandidateVO,
   ImportPreviewVO,
@@ -33,6 +34,33 @@ export const fetchImage = (id: number) => get<ImageVO>('/images/' + id)
 export const fetchStats = () => get<StatsVO>('/images/stats')
 export const deleteImage = (id: number) => del<void>('/images/' + id)
 
+/** 批量删除：把选中的图片移入回收站（可在回收站恢复或彻底删除），返回移入回收站的张数 */
+export const deleteImages = (imageIds: number[]) => post<number>('/images/delete/batch', { imageIds })
+
+/** 这张图可用的全部链接（原始地址 + 各 CDN + 代理下载），供「选择复制哪种链接」用 */
+export const fetchImageLinks = (id: number) => get<ImageLinkVO[]>('/images/' + id + '/links')
+
+/** 回收站列表（仅超级管理员） */
+export function fetchTrash(params: { page: number; size: number; keyword?: string }) {
+  return get<PageResult<ImageVO>>('/images/trash', params as unknown as Record<string, unknown>)
+}
+
+/** 从回收站恢复 */
+export const restoreImages = (imageIds: number[]) => post<number>('/images/trash/restore', { imageIds })
+
+/** 彻底删除：同时删掉云端对象与本地记录，不可恢复 */
+export const purgeImages = (imageIds: number[]) => post<number>('/images/trash/delete', { imageIds })
+
+/** 清空回收站：把回收站里的图片全部彻底删除 */
+export const clearTrash = () => post<number>('/images/trash/clear')
+
+/** 下载单张原图（由后端代理取回，私有仓库 / 私有桶也能下） */
+export const downloadImage = (id: number) => getBlob('/images/' + id + '/download')
+
+/** 批量下载：把选中的图片打包成一个 zip，一次最多 500 张 */
+export const downloadImagesZip = (imageIds: number[]) =>
+  postBlob('/images/download/batch', { imageIds })
+
 export function uploadImage(file: File, storageConfigId?: number) {
   const form = new FormData()
   form.append('file', file)
@@ -40,6 +68,30 @@ export function uploadImage(file: File, storageConfigId?: number) {
     form.append('storageConfigId', String(storageConfigId))
   }
   return post<ImageVO>('/images/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
+
+/**
+ * 带进度的单张上传。
+ * 上传会话（stores/upload.ts）用它逐张上传，才能拿到每张的进度 / 速度 / ETA。
+ */
+export function uploadImageWithProgress(
+  file: File,
+  storageConfigId: number | undefined,
+  onProgress: (loaded: number, total: number) => void,
+  signal?: AbortSignal,
+) {
+  const form = new FormData()
+  form.append('file', file)
+  if (storageConfigId) {
+    form.append('storageConfigId', String(storageConfigId))
+  }
+  return post<ImageVO>('/images/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    signal,
+    onUploadProgress: (event: { loaded: number; total?: number }) => {
+      onProgress(event.loaded, event.total && event.total > 0 ? event.total : file.size)
+    },
+  })
 }
 
 export function uploadImages(files: File[], storageConfigId?: number) {

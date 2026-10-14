@@ -2,11 +2,12 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-brand">
-        <h1>PicHost</h1>
+        <h1>qxfly-image-host</h1>
         <p>多云端图床管理</p>
       </div>
 
-      <el-tabs v-model="activeTab">
+      <!-- 只有后端打开了自助注册才显示「注册」页签（默认账号由超级管理员创建） -->
+      <el-tabs v-model="activeTab" :class="{ 'login-tabs--single': !registerEnabled }">
         <el-tab-pane label="登录" name="login">
           <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top">
             <el-form-item label="用户名" prop="username">
@@ -26,7 +27,7 @@
           </el-form>
         </el-tab-pane>
 
-        <el-tab-pane label="注册" name="register">
+        <el-tab-pane v-if="registerEnabled" label="注册" name="register">
           <el-form ref="registerFormRef" :model="registerForm" :rules="registerRules" label-position="top">
             <el-form-item label="用户名" prop="username">
               <el-input v-model="registerForm.username" placeholder="3-32 位字母、数字、下划线" />
@@ -45,17 +46,20 @@
       <p class="text-muted" style="text-align: center; margin: 4px 0 12px">
         初始管理员 admin / admin123，登录后请立即修改密码
       </p>
+      <p v-if="!registerEnabled" class="text-muted" style="text-align: center; margin: 0 0 12px">
+        账号由超级管理员在「用户管理」中创建
+      </p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Lock, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import { register } from '@/api/auth'
+import { fetchRegisterEnabled, register } from '@/api/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -63,6 +67,7 @@ const auth = useAuthStore()
 
 const activeTab = ref('login')
 const loading = ref(false)
+const registerEnabled = ref(false)
 const loginFormRef = ref<FormInstance>()
 const registerFormRef = ref<FormInstance>()
 
@@ -84,6 +89,14 @@ const registerRules: FormRules = {
     { min: 6, max: 64, message: '长度需在 6-64 位之间', trigger: 'blur' },
   ],
 }
+
+onMounted(async () => {
+  try {
+    registerEnabled.value = (await fetchRegisterEnabled()).data.enabled
+  } catch {
+    // 拿不到就按「不开放注册」处理
+  }
+})
 
 async function doLogin() {
   if (!loginFormRef.value) {
@@ -107,6 +120,9 @@ async function doLogin() {
 }
 
 async function doRegister() {
+  if (!registerEnabled.value) {
+    return
+  }
   if (!registerFormRef.value) {
     return
   }
@@ -127,3 +143,10 @@ async function doRegister() {
   }
 }
 </script>
+
+<style scoped>
+/* 关闭自助注册时只剩一个页签，把页签头隐藏，直接显示登录表单 */
+.login-tabs--single :deep(.el-tabs__header) {
+  display: none;
+}
+</style>

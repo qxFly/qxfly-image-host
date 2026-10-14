@@ -14,22 +14,26 @@
             :disabled="!item.enabled"
           />
         </el-select>
-        <span class="text-muted">也可以直接 Ctrl+V 粘贴剪贴板中的图片</span>
+        <span class="text-muted">
+          文件一添加就进入下面的上传列表；上传跑在会话里，切到别的页面也不会中断
+        </span>
       </div>
 
       <el-upload
+        ref="uploadRef"
         drag
         multiple
         :show-file-list="false"
-        :http-request="customUpload"
+        :auto-upload="false"
+        :on-change="onFileChange"
         :accept="accept"
-        :disabled="uploading"
       >
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
         <div class="el-upload__text">拖拽图片到此处，或 <em>点击选择文件</em></div>
         <template #tip>
           <div class="el-upload__tip">
-            支持 {{ extensions.join(' / ') }}，单张不超过 {{ formatSize(maxSize) }}
+            支持 {{ extensions.join(' / ') }}，单张{{ maxSizeText }}；
+            也可以直接 Ctrl+V 粘贴剪贴板里的图片
           </div>
         </template>
       </el-upload>
@@ -38,42 +42,84 @@
     <el-card shadow="never">
       <template #header>
         <div class="toolbar" style="margin: 0">
-          <span>本次会话已上传 {{ results.length }} 张</span>
+          <span>上传列表</span>
+          <span class="text-muted">
+            进行中 {{ store.activeCount }} 张 · 共 {{ store.tasks.length }} 条
+            <template v-if="store.totalSpeed > 0">（{{ formatSpeed(store.totalSpeed) }}）</template>
+          </span>
           <div class="toolbar-spacer"></div>
-          <el-button :disabled="results.length === 0" @click="copyAll('url', '全部直链')">复制全部直链</el-button>
-          <el-button :disabled="results.length === 0" @click="copyAll('markdown', '全部 Markdown')">
+          <el-button :disabled="store.successTasks.length === 0" @click="copyAll('url', '全部直链')">
+            复制全部直链
+          </el-button>
+          <el-button :disabled="store.successTasks.length === 0" @click="copyAll('markdown', '全部 Markdown')">
             复制全部 Markdown
           </el-button>
-          <el-button :disabled="results.length === 0" @click="results = []">清空</el-button>
+          <el-button :disabled="store.tasks.length === 0" @click="store.clearFinished()">清空已结束</el-button>
         </div>
       </template>
 
-      <el-empty v-if="results.length === 0" description="还没有上传记录" :image-size="70" />
-      <el-table v-else :data="results" size="small" style="width: 100%">
-        <el-table-column label="预览" width="80">
+      <el-empty v-if="store.tasks.length === 0" description="还没有上传记录，拖拽文件到上面即可开始" :image-size="80" />
+      <el-table v-else :data="store.tasks" size="small" style="width: 100%">
+        <el-table-column label="文件" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-image :src="row.thumbUrl || row.url" fit="cover" style="width: 48px; height: 48px; border-radius: 4px" />
+            <span>{{ row.name }}</span>
+            <span class="text-muted">　{{ formatSize(row.size) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="originalName" label="文件名" show-overflow-tooltip />
-        <el-table-column label="存储" width="140">
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tag size="small" effect="plain">{{ row.storageTypeLabel }}</el-tag>
+            <el-tooltip :disabled="!row.error" :content="row.error || ''" placement="top">
+              <el-tag size="small" effect="plain" :type="statusTag(row)">{{ statusText(row) }}</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="大小" width="100">
-          <template #default="{ row }">{{ formatSize(row.size) }}</template>
-        </el-table-column>
-        <el-table-column label="地址" min-width="260" show-overflow-tooltip>
+        <el-table-column label="进度" min-width="180">
           <template #default="{ row }">
-            <span class="mono">{{ row.url }}</span>
+            <el-progress
+              :percentage="row.progress"
+              :status="row.status === 'failed' ? 'exception' : row.status === 'success' ? 'success' : undefined"
+              :stroke-width="8"
+            />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="速度" width="110">
+          <template #default="{ row }">{{ formatSpeed(row.speed) }}</template>
+        </el-table-column>
+        <el-table-column label="剩余" width="110">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="copy(row.url, '图片直链')">直链</el-button>
-            <el-button size="small" link type="primary" @click="copy(row.markdown, 'Markdown')">MD</el-button>
-            <el-button size="small" link type="success" @click="preview(row)">打开</el-button>
+            {{ row.status === 'uploading' ? formatDuration(row.eta) : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="存储" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.storageTypeLabel" size="small" effect="plain">{{ row.storageTypeLabel }}</el-tag>
+            <span v-else class="text-muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="210" :fixed="isMobile ? undefined : 'right'">
+          <template #default="{ row }">
+            <template v-if="row.status === 'pending' || row.status === 'uploading'">
+              <el-button size="small" link type="danger" @click="store.cancel(row.id)">取消</el-button>
+            </template>
+            <template v-else-if="row.status === 'failed' || row.status === 'canceled'">
+              <el-button
+                size="small"
+                link
+                type="primary"
+                :disabled="!store.canRetry(row.id)"
+                @click="store.retry(row.id)"
+              >
+                重试
+              </el-button>
+            </template>
+            <template v-else>
+              <el-button size="small" link type="primary" @click="copy(row.copyUrl || row.url, '图片直链')">
+                直链
+              </el-button>
+              <el-button size="small" link type="primary" @click="copy(markdownOf(row), 'Markdown')">MD</el-button>
+              <el-button size="small" link type="success" @click="open(row.previewUrl || row.url)">打开</el-button>
+            </template>
+            <el-button size="small" link @click="store.remove(row.id)">移除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -82,19 +128,25 @@
 </template>
 
 <script setup lang="ts">
+import { useIsMobile } from '@/utils/responsive'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { uploadImage } from '@/api/images'
+import { ElMessage, type UploadFile, type UploadInstance } from 'element-plus'
 import { fetchStorageConfigs } from '@/api/storage'
 import { fetchSystemInfo } from '@/api/system'
-import { copyText, formatSize } from '@/utils/format'
-import type { ImageVO, StorageConfigVO } from '@/types'
+import { useUploadStore, type UploadTask } from '@/stores/upload'
+import { copyText, formatDuration, formatSize, formatSpeed } from '@/utils/format'
+import type { StorageConfigVO } from '@/types'
 
+const store = useUploadStore()
+const isMobile = useIsMobile()
+const uploadRef = ref<UploadInstance>()
 const configs = ref<StorageConfigVO[]>([])
-const results = ref<ImageVO[]>([])
 const selectedConfigId = ref<number | undefined>(undefined)
-const uploading = ref(false)
+/** 单张大小上限（字节）；-1 表示无上限（在「系统设置」里改） */
 const maxSize = ref(30 * 1024 * 1024)
+const maxSizeText = computed(() =>
+  maxSize.value > 0 ? '不超过 ' + formatSize(maxSize.value) : '不限大小',
+)
 const extensions = ref<string[]>(['jpg', 'jpeg', 'png', 'gif', 'webp'])
 
 const accept = computed(() => extensions.value.map((ext) => '.' + ext).join(','))
@@ -119,24 +171,34 @@ onMounted(async () => {
     // 忽略
   }
   document.addEventListener('paste', onPaste)
+  window.addEventListener('beforeunload', store.flush)
 })
 
+// UploadView 是路由组件，切走会卸载；但上传本身在 store 里，不受影响
 onUnmounted(() => {
   document.removeEventListener('paste', onPaste)
+  window.removeEventListener('beforeunload', store.flush)
 })
 
-async function customUpload(options: { file: File }) {
-  uploading.value = true
-  try {
-    const result = await uploadImage(options.file, selectedConfigId.value)
-    results.value.unshift(result.data)
-    ElMessage.success('上传成功：' + result.data.originalName)
-    return result.data
-  } catch (error) {
-    return Promise.reject(error)
-  } finally {
-    uploading.value = false
+/** 超过上限的直接拦下，免得白传一遍才被服务端拒绝 */
+function oversize(file: File) {
+  return maxSize.value > 0 && file.size > maxSize.value
+}
+
+/** 选完文件立刻进列表并开始上传 */
+function onFileChange(uploadFile: UploadFile) {
+  const raw = uploadFile.raw
+  if (raw) {
+    if (oversize(raw)) {
+      ElMessage.error(raw.name + ' 为 ' + formatSize(raw.size) + '，超过单张上限 ' + formatSize(maxSize.value))
+    } else {
+      const count = store.addFiles([raw], selectedConfigId.value)
+      if (count > 0) {
+        ElMessage.success('已加入上传列表：' + raw.name)
+      }
+    }
   }
+  uploadRef.value?.clearFiles()
 }
 
 function onPaste(event: ClipboardEvent) {
@@ -144,35 +206,90 @@ function onPaste(event: ClipboardEvent) {
   if (!items) {
     return
   }
+  const pasted: File[] = []
   for (const item of Array.from(items)) {
     if (item.type.indexOf('image') === 0) {
       const file = item.getAsFile()
-      if (file) {
-        customUpload({ file })
-        ElMessage.info('检测到剪贴板图片，开始上传')
+      if (file && !oversize(file)) {
+        pasted.push(file)
       }
     }
   }
+  if (pasted.length > 0) {
+    store.addFiles(pasted, selectedConfigId.value)
+    ElMessage.info('检测到剪贴板图片，已加入上传列表')
+  }
 }
 
-async function copy(text: string, label: string) {
+/** el-table 插槽行是宽松类型 */
+interface TaskRow {
+  status?: UploadTask['status']
+  name?: string
+  url?: string
+  previewUrl?: string
+  copyUrl?: string
+  markdown?: string
+}
+
+function statusText(task: TaskRow) {
+  switch (task.status) {
+    case 'pending':
+      return '排队中'
+    case 'uploading':
+      return '上传中'
+    case 'success':
+      return '完成'
+    case 'failed':
+      return '失败'
+    default:
+      return '已取消'
+  }
+}
+
+function statusTag(task: TaskRow) {
+  switch (task.status) {
+    case 'success':
+      return 'success'
+    case 'failed':
+      return 'danger'
+    case 'uploading':
+      return 'primary'
+    default:
+      return 'info'
+  }
+}
+
+async function copy(text?: string, label?: string) {
+  if (!text) {
+    return
+  }
   const ok = await copyText(text)
   if (ok) {
-    ElMessage.success(label + '已复制')
+    ElMessage.success((label || '内容') + '已复制')
   } else {
     ElMessage.warning('复制失败，请手动复制')
   }
 }
 
+/** Markdown 用「复制默认线路」的地址拼，跟 CDN 设置保持一致 */
+function markdownOf(task: TaskRow) {
+  if (task.copyUrl) {
+    return '![' + (task.name || '') + '](' + task.copyUrl + ')'
+  }
+  return task.markdown
+}
+
 async function copyAll(field: 'url' | 'markdown', label: string) {
-  const text = results.value
-    .map((item) => (field === 'url' ? item.url : item.markdown))
+  const text = store.successTasks
+    .map((task) => (field === 'url' ? task.copyUrl || task.url : markdownOf(task)))
     .filter(Boolean)
     .join('\n')
   await copy(text, label)
 }
 
-function preview(row: any) {
-  window.open(row.url, '_blank')
+function open(url?: string) {
+  if (url) {
+    window.open(url, '_blank')
+  }
 }
 </script>
