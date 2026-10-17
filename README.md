@@ -9,9 +9,16 @@
 ## 一、一键包
 
 ```powershell
-.package.cmd              # 在开发机上构建，产出 dist 下的两个包
-.package.cmd -Zip         # 额外生成 zip，便于传输
+.\package-server.cmd                    # 【推荐】双击/回车进向导：选环境 + 是否带运行时
+.\package-server.cmd -Env linux         # 只放 Ubuntu 入口 + Linux 运行时（约 290 MB，上传用）
+.\package-server.cmd -Env linux -Runtime none   # Linux 极简（约 90 MB，目标机自备 JDK）
+.\package-server.cmd -Env win           # 只放 Windows 入口 + 便携 JDK（本机测试用）
+.\package.cmd                            # 打包完整包（Windows + Linux 两个目录）
+.package.cmd -Zip                        # 额外生成 zip，便于传输
 ```
+
+> 不想记命令就双击 `toolbox.cmd` 进菜单：`6) 打包服务端包（向导）`、`7) Linux 极简`、`8) Linux 带运行时`、`9) Windows 测试用`。
+> `-Env` 决定放哪套入口（`linux`/`win`/`both`），`-Runtime` 不写时按 `-Env` 自动推导。
 
 产物：
 
@@ -19,11 +26,12 @@
 | --- | --- | --- |
 | ```qxfly-image-host-win-x64``` | ```runtimewin-x64{jdk,node}```（已解压）+ 生产版 jar | 拷过去，双击 ```start.cmd``` |
 | ```qxfly-image-host-linux-x64``` | ```runtime_cache``` 内的 Linux JDK/Node 压缩包 + 生产版 jar | 拷过去，```./start.sh```（首次自动解压运行时） |
+| ```qxfly-image-host-server``` | **服务端包（扁平）**：`qxfly-image-host.jar` 在包根 + `config/ deploy/ runtime/` + `DEPLOY-README.txt`；入口按 `-Env` 选（`linux`/`win`/`both`），运行时按 `-Runtime` 选（默认按环境推导） | 一键打：```package-server.cmd```；`-Env linux` 时上传服务器 → ```cp config/local.env.example config/local.env``` → ```./start.sh -Mode prod``` |
 
 生产版 jar 已经把前端界面打进 ```static/```，所以**一个进程同时提供接口和页面**：
 
 ```powershell
-.start.ps1 -Mode prod      # Windows：单进程，访问 http://127.0.0.1:8080
+.start.cmd -Mode prod      # Windows：单进程，访问 http://127.0.0.1:8080
 ./start.sh -Mode prod       # Ubuntu ：单进程，访问 http://127.0.0.1:8080
 ```
 
@@ -31,7 +39,7 @@
 > 所以 Windows 包内是「解压好的运行时」，Linux 包内是「压缩包 + 首次运行自动解压」。
 
 > **一键包里没有桌面客户端**：Tauri 客户端要在有 Rust 工具链的机器上编译（约 2 分钟），
-> 所以它是单独打的 —— 用 `scripts/build-desktop.ps1` 一条命令产出，
+> 所以它是单独打的 —— 用 `scripts/package-desktop.ps1` 一条命令产出，
 > 详见「七、源码方式启动 → 打包成桌面客户端（Tauri 2）」。
 
 ---
@@ -76,7 +84,7 @@ config/local.env
   MYSQL_HOST / MYSQL_PORT / MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD
 ```
 
-```start.ps1``` / ```start.sh``` 启动时会自动加载它。该文件已被 ```.gitignore``` 忽略。
+```start.cmd``` / ```start.sh``` 启动时会自动加载它。该文件已被 ```.gitignore``` 忽略。
 没有它时会退回到 ```application.yml``` 里的默认口令（root / qxfly-image-host123），连不上还会自动降级到 H2 内存库，保证一键可用。
 
 ---
@@ -95,9 +103,9 @@ runtime/
 获取方式（开发机上执行一次）：
 
 ```powershell
-.scriptssetup-runtime.ps1              # 拉取 win + linux 两套
-.scriptssetup-runtime.ps1 -Platform win
-.scriptssetup-runtime.ps1 -Force -KeepArchive
+.scriptssetup-portable-runtime.ps1              # 拉取 win + linux 两套
+.scriptssetup-portable-runtime.ps1 -Platform win
+.scriptssetup-portable-runtime.ps1 -Force -KeepArchive
 ```
 
 启动脚本会优先使用 ```runtime```，找不到才回退系统 PATH。可用 ```-Offline``` 禁止联网下载。
@@ -159,6 +167,18 @@ runtime/
 
 > 换机器 / 换容器时，存储目录要跟着挂载或迁移，否则图片会「找不到」；
 > 目录别放在会被清理的临时目录里（默认的 ```server/uploads``` 已被 .gitignore 忽略）。
+
+### 图库筛选（体积 / 日期 / 尺寸）
+
+工具栏的「**筛选**」按钮（右上角有生效维度数量的角标）支持按区间过滤，未填的维度不参与：
+
+- **体积**：最小 / 最大，单位 MB（实测 4980 张里筛 1MB 以上 = 1368 张）
+- **上传日期**：起止日期，含当天（左闭右开）
+- **宽 / 高**：像素区间（导入的旧图没有尺寸记录，不会被命中）
+- 与关键字、目录、存储后端**可叠加**；「重置」一键清空
+
+接口：`GET /api/images?minSize=&maxSize=&dateFrom=&dateTo=&minWidth=&maxWidth=&minHeight=&maxHeight=`，
+全部可选。后端查询对象为 `ImageQueryDTO`，后续加筛选维度只需加字段。
 
 ### 从仓库/桶导入已有图片
 
@@ -358,6 +378,9 @@ runtime/
 - 宽度可用 ```?w=``` 指定（32 ~ 1600，默认 400）；带透明通道输出 PNG，其余输出 JPEG
 - **解不了的格式**（SVG / WebP）与**超过 ```THUMB_MAX_SOURCE```（默认 20MB）的原图**直接返回 404，前端自动退回原图地址
 - 回收站里的图不生成缩略图
+- **缓存有上限与保留期**：超过 `THUMB_CACHE_MAX_SIZE`（默认 2GB）按最久未使用淘汰、
+  超过 `THUMB_CACHE_DAYS`（默认 30 天）按时间清理；每写 50 张惰性触发一次，
+  「系统设置 → 缩略图缓存」可查看占用并一键清空（只删缓存，不影响原图与图库记录）
 - **地址是绝对的**（' + F + 'http://你的地址/thumb/...' + F + '）：页面不一定来自后端本身 —— Tauri 桌面端页面来自 ' + F + 'tauri://localhost' + F + '、
   Vite 开发服务器只代理 /api、反向代理挂在别的域名下，根相对地址（' + F + '/thumb/...' + F + '）在那些场景全都打不开。
   基地址的取值顺序：**当前请求地址 → ' + F + 'PUBLIC_BASE_URL' + F + ' → ' + F + 'http://127.0.0.1:<端口>' + F + '**
@@ -387,6 +410,10 @@ runtime/
 
 「审计日志」页（仅超级管理员）：谁在什么时候做了什么，支持按动作 / 结果 / 关键字（用户名、详情、IP）过滤。
 
+- **保留策略**：`AUDIT_RETENTION_DAYS`（默认 180 天）超期自动清理，应用启动后每 24 小时执行一次；设为 0 表示永久保留
+- **导出 CSV**：`GET /api/audit-logs/export` 支持与列表相同的 `keyword / action / success` 筛选，
+  带 UTF-8 BOM（Excel 打开中文不乱码），单次最多导出 `AUDIT_EXPORT_MAX_ROWS`（默认 50000）行
+
 记录的是**会产生影响的操作**：登录（成功 / 失败 / 锁定）、上传、移入回收站、恢复、彻底删除、清空回收站、
 存储配置增删改、账号增删改与重置密码、系统设置修改、创建 / 撤销分享。读操作不记，免得日志被翻页刷满。
 每条含操作者、动作、对象、详情、来源 IP（优先取 ```X-Forwarded-For```）与 User-Agent。
@@ -399,6 +426,31 @@ runtime/
 - 计数在内存里，重启即清空：攻击者拿不到持久的锁，管理员也不用手工解锁
 - 计数窗口就是锁定时长：一段时间没有新的失败就重新计数，避免有人每天失败几次把正常用户长期锁在门外
 
+### 分享：打包下载与访问明细
+
+- **打包下载**：相册页有「打包下载全部」按钮；接口 `GET /api/shares/{token}/download`（**公开**，密码相册带 `?password=`）。
+  后端**边取边写 zip**：内存里最多只放一张图，几百张也不会把服务端撑爆；单张失败只写进包内失败清单
+- **访问明细**：每次打开相册（含打包下载）都会记一条「时间 / 来源 IP / User-Agent」，
+  「分享链接」页点「明细」查看最近 200 条。明细表 ```share_view``` 只保留每条分享最近 200 条，防刷
+
+### 元数据导出与回灌（数据备份兜底）
+
+图在云端、清单在 MySQL —— 库一旦出问题就只剩一堆散图。**「系统设置 → 数据备份」**把清单单独留一份：
+
+- **导出**：```GET /api/images/export?format=csv|json```。只导元数据（对象键、访问地址、大小、sha256、宽高、
+  存储类型、回收站状态、时间），**不含图片文件本身**；CSV 带 UTF-8 BOM，Excel 直接打开中文不乱码
+- **回灌**：```POST /api/images/import-manifest```，按**对象键去重、幂等**（同一份清单重复导入不会产生重复行），
+  只补库里没有的记录、**不会重新下载或上传任何文件**；存储配置不存在时回落到该账号第一个可用配置
+- 典型场景：换数据库后把清单导回来；误删了记录；想核对云端与库里的存量是否一致
+
+### 存储后端定时体检（凭证过期早知道）
+
+Token 过期、桶被删、网络不通这类问题，与其等用户上传失败才发现，不如定期主动测一遍：
+
+- **每 6 小时**把所有「已启用」的配置真测一遍（```STORAGE_CHECK_ENABLED``` / ```STORAGE_CHECK_INTERVAL_HOURS``` 可配）
+- **失败才写审计日志**（动作码 ```STORAGE_CHECK```），成功的不刷屏
+- 「存储设置」列表有「健康」列（正常 / 异常 / 未检测，悬停看上次时间与原因），也有「立即体检」按钮手动跑
+
 ### 重复图片
 
 「重复图片」页（仅超级管理员）：按内容 sha256 分组，把**完全一样**的多份文件找出来 ——
@@ -407,6 +459,41 @@ runtime/
 - 每组标出「保留」的那张（最早上传的，最可能是图库在用的记录），显示可回收的空间
 - 「只保留最早一张」/「全部清理」都是**移入回收站**而不是物理删除，误判还能恢复
 - 只比对内容完全相同的文件，不做相似图检测（感知哈希有误判风险，宁可漏杀不可错杀）
+**保留哪一张可选**（内容都一样，差别只是留哪条记录）：
+
+| 策略 | 说明 |
+| --- | --- |
+| 最早上传（默认） | id 最小，最可能是图库在用的那条 |
+| 最新上传 | id 最大 |
+| 最大文件 | size 最大 |
+
+**可按存储后端 / 目录前缀筛选**（与图库同一套语义），接口：
+
+- 列表：`GET /api/images/duplicates?storageConfigId=&directory=`
+- 清理：`DELETE /api/images/duplicates?hash=&keep=earliest|latest|largest&storageConfigId=`
+
+### 页面结构抽取（去重）
+
+列表页的头部与分页是重复最多的两块，抽成了共享组件：
+
+| 组件 | 作用 | 已接入 |
+| --- | --- | --- |
+| `PageHeader.vue` | 标题 + 副标题 + 右侧操作区，统一间距 | 分享链接 / 回收站 / 用户管理 / 审计日志 / 重复图片 |
+| `Pager.vue` | 统一分页条（布局、尺寸样式只写一遍） | 审计日志 / 重复图片 |
+| `usePager.ts` | 分页状态组合式函数（page/size/total + 翻页回调） | 新页面推荐直接用 |
+
+之前每个页面各写一份 `<h2 class="page-title">` 与 `<el-pagination>`，间距与按钮顺序不一致；
+现在新增页面直接复用组件即可。
+
+### 迁移：失败项持久化 + 一键重试
+
+任务列表只在内存里，**服务重启后会清空**（已知设计）。但「哪些图没迁成」不能跟着丢：
+
+- 失败项落到表 `migration_failure`（图 id + 目标配置 + 原因），**重启不丢**
+- 「后台任务」面板顶部出现**「失败项」区块**：图片名、失败原因、时间 + 「一键重试」按钮
+- 重试 = 把这批失败记录**按原目标**重新提交成一个新的迁移任务（照常后台跑、可取消）；
+  重试前先清掉这批记录，仍失败的会重新写入，成功的自然消失
+- 接口：`GET /api/images/migrate/failures` 与 `POST /api/images/migrate/retry?toConfigId=`（不传则重试全部）
 
 ### CDN 线路（预览 / 下载 / 复制各用哪条）
 
@@ -504,6 +591,28 @@ runtime/
   确认后批量移入回收站（可恢复），失败或取消都不会动任何图片
 - **选中态一眼可辨**：卡片加蓝色描边 + 光晕，左上角的选择标记填成实心蓝；悬停时图片轻微放大，右下角提示可点击预览
 
+### 概览页：可行动提示（待处理）
+
+统计数字只能说明"有多少"，概览还会回答"该做什么"——**有问题时才出现**的提示条，点击直接跳过去：
+
+| 提示 | 触发条件 | 点击去 |
+| --- | --- | --- |
+| 回收站里有 N 张图片 | 回收站非空 | 回收站 |
+| 发现 N 组重复图片 | 存在内容相同的多份 | 重复图片 |
+| 存储后端「X」体检失败 | 定时体检发现凭证过期 / 桶被删 / 网络不通 | 存储设置 |
+| 分享「X」即将过期 | 分享有效期不足 72 小时 | 分享链接 |
+
+接口：`GET /api/system/alerts`（登录即可访问，无问题时返回空数组）。
+
+### 界面统一：空状态与骨架屏
+
+列表类页面（图库 / 回收站 / 用户 / 存储 / 分享 / 重复图片 / 上传记录）统一使用：
+
+- **`EmptyState`**：柔和图标块 + 标题 + 灰色说明 + 可选主操作按钮。替换掉此前 12 处尺寸与文案都不一致的 `el-empty`
+- **`ListSkeleton`**：接口返回前的骨架屏（列表行占位 + 呼吸动画），避免首屏白屏；
+  系统开了「减弱动效」时动画自动关闭
+- **`TableCardList`**：手机端（≤820px）把表格换成卡片列表（标签 + 值 + 操作区），**数据与表格同源**。解决窄屏下「只能横向滚动、操作列占满屏幕」的问题。已接入回收站 / 用户管理 / 存储设置 / 分享链接 / 上传记录 / 审计日志 6 个表格页；桌面端仍是表格，`isMobile` 自动切换
+
 ### 概览页：最近上传
 
 概览页的「最近上传」是**按日期分组的紧凑网格**（最近 24 张），一屏能扫完几十张：
@@ -591,13 +700,13 @@ runtime/
 
 ```text
 qxfly-image-host/
-├── start.ps1 / start.cmd / start.sh     一键启动（win / linux）
-├── mysql-service.cmd / mysql.cmd        MySQL 服务管理 / 客户端入口（Windows）
-├── mysql.sh                             MySQL 服务管理（Ubuntu）
-├── package.cmd / scripts/package.ps1    一键打包
-├── runtime/                             便携运行时（除数据库外的全部环境）
-├── scripts/setup-runtime.ps1            下载便携 JDK / Node
-├── scripts/mysql-service.ps1            MySQL 服务管理实现
+├── start.cmd                           一键启动（Windows，独立入口）
+├── toolbox.cmd                         工具箱：打包 / 桌面端 / 运行时 / 数据库 / 诊断 / 清理 / 部署模板
+├── package.cmd / mysql-service.cmd     兼容保留的快捷入口
+├── mysql.cmd                           MySQL 客户端入口（Windows）
+├── start.sh / mysql.sh                 Linux 入口
+├── runtime/                            便携运行时（除数据库外的全部环境）
+├── scripts/                            所有实现脚本（common-library.ps1 公共库、start.cmd、toolbox-menu.ps1、README.md…）
 ├── config/local.env                     数据库连接（init 生成，已忽略）
 ├── server/                              Spring Boot 3 后端
 │   ├── mvnw / mvnw.cmd                  自带 Maven 包装器
@@ -615,13 +724,13 @@ qxfly-image-host/
 ## 七、源码方式启动（开发用）
 
 ```powershell
-.start.ps1                      # 后端 + Vite 前端（http://localhost:5173）
-.start.ps1 -Action status
-.start.ps1 -Action stop
-.start.ps1 -Database h2         # 强制内存库
-.start.ps1 -Target desktop      # Tauri 桌面端
-.start.ps1 -Rebuild             # 强制重新编译后端
-.start.ps1 -BackendPort 8081 -WebPort 5174   # 临时改端口
+.start.cmd                      # 后端 + Vite 前端（http://localhost:5173）
+.start.cmd -Action status
+.start.cmd -Action stop
+.start.cmd -Database h2         # 强制内存库
+.start.cmd -Target desktop      # Tauri 桌面端
+.start.cmd -Rebuild             # 强制重新编译后端
+.start.cmd -BackendPort 8081 -WebPort 5174   # 临时改端口
 ```
 
 **端口怎么改**（不用改脚本，脚本里的 8080 / 5173 只是默认值）：
@@ -629,7 +738,7 @@ qxfly-image-host/
 方式一：命令行参数（最临时）
 
 ```powershell
-.\start.ps1 -BackendPort 8081 -WebPort 5174
+.\start.cmd -BackendPort 8081 -WebPort 5174
 ./start.sh  -BackendPort 8081 -WebPort 5174
 ```
 
@@ -654,16 +763,16 @@ Vite 的 `/api` 代理目标也跟着 `BACKEND_PORT` 走，所以只改一处即
 桌面端和浏览器端**共用同一份 Vue 代码**，外壳是 `web/src-tauri`（Rust）。开发时热更新调试：
 
 ```powershell
-.\start.ps1 -Target desktop     # 等价于 cd web && npm run tauri:dev
+.\start.cmd -Target desktop     # 等价于 cd web && npm run tauri:dev
 ```
 
 打正式包：
 
 ```powershell
-.\scripts\build-desktop.ps1                                  # 免安装 exe + NSIS/MSI 安装包
-.\scripts\build-desktop.ps1 -NoBundle                        # 只出免安装 exe（不下载打包器，国内最稳）
-.\scripts\build-desktop.ps1 -ApiBase https://img.example.com/api   # 客户端默认连这个后端
-.\scripts\build-desktop.ps1 -BackendPort 8081                # 后端在本机别的端口
+.\scripts\package-desktop.ps1                                  # 免安装 exe + NSIS/MSI 安装包
+.\scripts\package-desktop.ps1 -NoBundle                        # 只出免安装 exe（不下载打包器，国内最稳）
+.\scripts\package-desktop.ps1 -ApiBase https://img.example.com/api   # 客户端默认连这个后端
+.\scripts\package-desktop.ps1 -BackendPort 8081                # 后端在本机别的端口
 ```
 
 产物在 ```dist/desktop/```（同时保留在 ```web/src-tauri/target/release/```）：
@@ -776,6 +885,12 @@ docker compose up -d             # 需要 MySQL / MinIO 时（可选）
 | GET | /thumb/{id}?w=&s= | **按需缩略图**（签名保护，匿名可访问） |
 | GET/PUT | /api/settings | 系统设置（单张上限 / 登录锁定 / 防盗链） |
 | GET | /api/audit-logs | 审计日志查询（仅超级管理员） |
+| GET | /api/system/alerts | 概览「待处理」提示（回收站/重复/体检失败/分享将过期，无问题时为空） |
+| GET | /api/audit-logs/export | 审计日志导出为 CSV（BOM + 可选筛选，仅超级管理员） |
+| POST | /api/storage-configs/check | 立即体检所有启用的存储配置（也每 6 小时自动跑一次） |
+| GET | /api/images/export?format=csv\|json | 导出图片元数据清单（BOM，便于 Excel 打开） |
+| POST | /api/images/import-manifest | 按清单回灌元数据（按对象键去重、幂等，不碰云端文件） |
+| GET/DELETE | /api/settings/thumb-cache | 缩略图缓存占用统计 / 一键清空 |
 | GET | /api/images/duplicates、DELETE 同路径 | 重复图片分组与清理 |
 | POST/GET/DELETE | /api/shares | 分享链接的创建 / 列表 / 撤销 |
 | POST | /api/shares/{token}/view | **分享相册的公开访问**（匿名，需要密码时在这里校验） |
@@ -844,6 +959,11 @@ docker compose up -d             # 需要 MySQL / MinIO 时（可选）
 - [x] 上传会话：列表实时进度 / 速度 / ETA，状态存 sessionStorage，切换路由不中断
 - [x] 单张文件大小上限可在「系统设置」里改，**支持无上限**（立即生效，Servlet 层不再是瓶颈）
 - [x] **上传全程流式落盘**（256MB 堆实测传上 300MB），JVM 堆参数可用 `JAVA_OPTS` 配置
+- [x] **元数据清单导出/回灌**（CSV BOM + JSON，按对象键去重幂等；数据备份兜底）
+- [x] **存储后端定时体检**（每 6 小时，失败写审计日志 + 存储页「健康」列 + 立即体检）
+- [x] 无障碍：图片补 `alt`、图标按钮补 `aria-label` / `aria-hidden`
+- [x] **界面统一**：`EmptyState`（替代 12 处 el-empty）+ `ListSkeleton` 骨架屏
+- [x] **概览可行动提示**：回收站/重复图片/体检失败/分享将过期，有问题才出现、可点击跳转
 - [x] **自动化测试**（56 项：单元 + H2 端到端集成测试）与 **CI**（.github/workflows/ci.yml）
 - [x] 按需**缩略图**（HMAC 签名 + 磁盘缓存），图库列表不再加载原图
 - [x] **分享链接**（相册 / 密码 / 有效期 / 访问计数 / 随时撤销）与**防盗链**（Referer 白名单）

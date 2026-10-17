@@ -18,11 +18,32 @@ export interface ImageQuery {
   storageConfigId?: number
   /** 目录前缀；__root__ 表示只看根目录下的文件 */
   directory?: string
-  /** 搜索模式：fuzzy（默认）| exact */
+  /** 搜索模式：fuzzy（默认）| exact | prefix */
   matchMode?: string
+  /** 体积区间（字节） */
+  minSize?: number
+  maxSize?: number
+  /** 上传日期区间（yyyy-MM-dd，左闭右开含当天） */
+  dateFrom?: string
+  dateTo?: string
+  /** 尺寸区间（像素） */
+  minWidth?: number
+  maxWidth?: number
+  minHeight?: number
+  maxHeight?: number
 }
 
 /** 目录树 */
+/** 导出图片元数据清单（CSV 带 BOM 可直接用 Excel 打开 / JSON） */
+export function exportManifest(format: 'csv' | 'json' = 'csv') {
+  return getBlob('/images/export', { format })
+}
+
+/** 按清单回灌元数据：只补库里没有的记录（按对象键去重、幂等），不重新下载或上传文件 */
+export function importManifest(items: Record<string, unknown>[]) {
+  return post<{ inserted: number; skipped: number; total: number }>('/images/import-manifest', { items })
+}
+
 export function fetchDirectories(storageConfigId?: number) {
   const params = { storageConfigId } as unknown as Record<string, unknown>
   return get<DirectoryTreeVO>('/images/directories', params)
@@ -188,6 +209,20 @@ export function fetchMigrateTasks() {
 /** 查询单个迁移任务的进度 */
 export function fetchMigrateStatus(taskId: string) {
   return get<MigrationTaskVO>('/images/migrate/' + taskId)
+}
+
+/** 已持久化的迁移失败项（重启不丢） */
+export function fetchMigrationFailures() {
+  return get<
+    { imageId: number; originalName: string; toConfigId: number; reason?: string; createdAt: string }[]
+  >('/images/migrate/failures')
+}
+
+/** 一键重试失败项：重新提交成一个迁移任务；返回新任务 */
+export function retryMigrationFailures(toConfigId?: number) {
+  return post<MigrationTaskVO>(
+    '/images/migrate/retry' + (toConfigId ? '?toConfigId=' + toConfigId : ''),
+  )
 }
 
 /** 取消迁移 */

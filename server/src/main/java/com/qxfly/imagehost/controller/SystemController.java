@@ -24,6 +24,7 @@ public class SystemController {
     private final StorageServiceFactory storageServiceFactory;
     private final AppProperties appProperties;
     private final AppSettingService appSettingService;
+    private final com.qxfly.imagehost.service.AlertService alertService;
 
     @GetMapping("/info")
     public ApiResult<Map<String, Object>> info() {
@@ -41,6 +42,13 @@ public class SystemController {
         info.put("importMaxFiles", appProperties.getUpload().getImportMaxFiles());
         info.put("migrateConcurrency", appProperties.getMigrate().getConcurrency());
         return ApiResult.ok(info);
+    }
+
+    /** 概览页的可行动提示：有问题时才返回条目 */
+    @GetMapping("/alerts")
+    public ApiResult<List<com.qxfly.imagehost.dto.AlertVO>> alerts() {
+        return ApiResult.ok(alertService.alerts(
+                com.qxfly.imagehost.security.SecurityUtils.currentUser()));
     }
 
     @GetMapping("/storage-types")

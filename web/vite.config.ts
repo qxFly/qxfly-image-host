@@ -7,7 +7,7 @@ const host = process.env.TAURI_DEV_HOST
 
 /**
  * 开发服务器端口与后端代理目标都可通过环境变量覆盖
- * （start.ps1 / start.sh 会从 config/local.env 读端口后注入）：
+ * （start.cmd / start.sh 会从 config/local.env 读端口后注入）：
  *   WEB_PORT        前端端口，默认 5173
  *   BACKEND_PORT    后端端口，默认 8080
  *   VITE_API_TARGET 直接指定代理目标（优先级最高），例如 http://127.0.0.1:9000

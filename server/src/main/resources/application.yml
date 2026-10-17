@@ -112,6 +112,17 @@ app:
     cache-dir: ${THUMB_CACHE_DIR:thumbs}
     # 太大的原图不生成缩略图（要整份读进内存），直接退回原图直链
     max-source-size: ${THUMB_MAX_SOURCE:20971520}
+    # 缓存目录总量上限（默认 2GB）与最长保留天数（默认 30 天），超出按最久未使用淘汰
+    cache-max-size: ${THUMB_CACHE_MAX_SIZE:2147483648}
+    cache-days: ${THUMB_CACHE_DAYS:30}
+  # 存储后端定时体检：启动时 + 每 N 小时把启用的配置都测一遍，失败写审计日志
+  storage-check:
+    enabled: ${STORAGE_CHECK_ENABLED:true}
+    interval-hours: ${STORAGE_CHECK_INTERVAL_HOURS:6}
+  # 审计日志：保留天数（超期自动清理）与导出上限
+  audit:
+    retention-days: ${AUDIT_RETENTION_DAYS:180}
+    export-max-rows: ${AUDIT_EXPORT_MAX_ROWS:50000}
   # 账号注册：默认关闭（账号由超级管理员在「用户管理」里创建）
   # 设为 true 则任何人可自助注册，注册出来的账号是普通用户（仅能浏览查看下载）
   register:

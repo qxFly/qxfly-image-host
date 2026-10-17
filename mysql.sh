@@ -113,9 +113,9 @@ show_status() {
   if [ -f "$ENV_FILE" ]; then
     printf '%s  连接配置 : %s%s\n' "$C_GREEN" "$ENV_FILE" "$C_RESET"
     local u p d
-    u="$(grep '^MYSQL_USER=' "$ENV_FILE" | cut -d= -f2-)"
-    p="$(grep '^MYSQL_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
-    d="$(grep '^MYSQL_DATABASE=' "$ENV_FILE" | cut -d= -f2-)"
+    u="$(grep '^MYSQL_USER=' "$ENV_FILE" | cut -d= -f2- | tr -d '\r')"
+    p="$(grep '^MYSQL_PASSWORD=' "$ENV_FILE" | cut -d= -f2- | tr -d '\r')"
+    d="$(grep '^MYSQL_DATABASE=' "$ENV_FILE" | cut -d= -f2- | tr -d '\r')"
     if [ -n "$u" ] && run_sql 'SELECT 1;' "$u" "$p" "$d" >/dev/null 2>&1; then
       printf '%s  连接测试 : 通过（账号 %s，库 %s）%s\n' "$C_GREEN" "$u" "$d" "$C_RESET"
     else

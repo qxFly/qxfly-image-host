@@ -4,6 +4,7 @@
       <el-image
         class="link-thumb"
         :src="thumb"
+        :alt="image && image.originalName ? image.originalName : '图片'"
         fit="cover"
         :preview-src-list="image ? [image.previewUrl || image.url] : []"
         preview-teleported

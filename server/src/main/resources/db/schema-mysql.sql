@@ -20,6 +20,34 @@ CREATE TABLE IF NOT EXISTS sys_user
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_general_ci;
 
+-- 迁移失败项（持久化，重启不丢，可一键重试）
+CREATE TABLE IF NOT EXISTS migration_failure
+(
+    id           BIGINT       NOT NULL AUTO_INCREMENT,
+    image_id     BIGINT       NOT NULL,
+    to_config_id BIGINT       NOT NULL,
+    reason       VARCHAR(255)          DEFAULT NULL,
+    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE INDEX uk_migration_failure (image_id, to_config_id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_general_ci;
+
+-- 分享的访问明细（谁在什么时候打开过），用于「分享链接」页的访问日志
+CREATE TABLE IF NOT EXISTS share_view
+(
+    id         BIGINT       NOT NULL AUTO_INCREMENT,
+    share_id   BIGINT       NOT NULL,
+    ip         VARCHAR(64)           DEFAULT NULL,
+    user_agent VARCHAR(255)          DEFAULT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_share_view (share_id, id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_general_ci;
+
 -- 分享链接（相册）：把选中的图片打包成一个可对外访问的链接，支持有效期 / 访问密码 / 随时撤销
 CREATE TABLE IF NOT EXISTS share_link
 (

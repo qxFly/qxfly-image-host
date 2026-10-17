@@ -40,8 +40,14 @@ public class ThumbnailService {
     /** 缩略图公开路径前缀：/thumb/{id}?w=400&s=签名 */
     public static final String URL_PREFIX = "thumb";
 
+    /** 每写这么多张检查一次缓存总量 */
+    private static final int EVICT_CHECK_EVERY = 50;
+
     private final AppProperties appProperties;
     private final RequestBase requestBase;
+
+    private final java.util.concurrent.atomic.AtomicInteger writesSinceEvict =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     /** 是否启用 */
     public boolean enabled() {
@@ -124,6 +130,11 @@ public class ThumbnailService {
             Path temp = Files.createTempFile(cache.getParent(), ".thumb-", ".tmp");
             Files.write(temp, rendered);
             Files.move(temp, cache, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            // 每写 50 张检查一次总量，避免缓存目录无限膨胀
+            if (writesSinceEvict.incrementAndGet() >= 50) {
+                writesSinceEvict.set(0);
+                evictIfNeeded();
+            }
         } catch (IOException e) {
             log.warn("写缩略图缓存失败: {}（{}）", cache, e.getMessage());
         }
@@ -172,7 +183,116 @@ public class ThumbnailService {
         }
     }
 
-    private Path cacheFile(Long imageId, int width, String sourceHash) {
+    /** 缓存目录统计（给设置页显示） */
+    public java.util.Map<String, Object> cacheStats() {
+        Path dir = cacheDir();
+        long files = 0L;
+        long bytes = 0L;
+        if (Files.isDirectory(dir)) {
+            try (var stream = Files.list(dir)) {
+                for (Path path : stream.toList()) {
+                    if (Files.isRegularFile(path)) {
+                        files++;
+                        bytes += Files.size(path);
+                    }
+                }
+            } catch (IOException e) {
+                log.debug("统计缩略图缓存失败: {}", e.getMessage());
+            }
+        }
+        java.util.Map<String, Object> stats = new java.util.LinkedHashMap<>();
+        stats.put("dir", dir.toString());
+        stats.put("files", files);
+        stats.put("bytes", bytes);
+        stats.put("maxBytes", appProperties.getThumb().getCacheMaxSize());
+        stats.put("days", appProperties.getThumb().getCacheDays());
+        return stats;
+    }
+
+    /** 清空缩略图缓存，返回删除的文件数 */
+    public int clearCache() {
+        Path dir = cacheDir();
+        int deleted = 0;
+        if (!Files.isDirectory(dir)) {
+            return 0;
+        }
+        try (var stream = Files.list(dir)) {
+            for (Path path : stream.toList()) {
+                if (Files.isRegularFile(path) && Files.deleteIfExists(path)) {
+                    deleted++;
+                }
+            }
+        } catch (IOException e) {
+            log.warn("清空缩略图缓存失败: {}", e.getMessage());
+        }
+        log.info("已清空缩略图缓存，删除 {} 个文件", deleted);
+        return deleted;
+    }
+
+    /**
+     * 缓存淘汰：先按天数删过期的，再按最久未使用（lastModified）删到总量上限以内。
+     * 只在写入路径上惰性触发，不引入定时任务。
+     */
+    private void evictIfNeeded() {
+        Path dir = cacheDir();
+        if (!Files.isDirectory(dir)) {
+            return;
+        }
+        AppProperties.Thumb config = appProperties.getThumb();
+        long maxBytes = config.getCacheMaxSize();
+        int days = config.getCacheDays();
+        if (maxBytes <= 0 && days <= 0) {
+            return;
+        }
+        try {
+            java.util.List<Path> files = new java.util.ArrayList<>();
+            long total = 0L;
+            long deadline = System.currentTimeMillis() - days * 24L * 3600_000L;
+            int expired = 0;
+            try (var stream = Files.list(dir)) {
+                for (Path path : stream.toList()) {
+                    if (!Files.isRegularFile(path) || path.getFileName().toString().startsWith(".thumb-")) {
+                        continue;
+                    }
+                    long modified = Files.getLastModifiedTime(path).toMillis();
+                    if (days > 0 && modified < deadline) {
+                        Files.deleteIfExists(path);
+                        expired++;
+                        continue;
+                    }
+                    files.add(path);
+                    total += Files.size(path);
+                }
+            }
+            int evicted = 0;
+            if (maxBytes > 0 && total > maxBytes) {
+                files.sort(java.util.Comparator.comparingLong(p -> {
+                    try {
+                        return Files.getLastModifiedTime(p).toMillis();
+                    } catch (IOException e) {
+                        return 0L;
+                    }
+                }));
+                for (Path path : files) {
+                    if (total <= maxBytes) {
+                        break;
+                    }
+                    long size = Files.size(path);
+                    if (Files.deleteIfExists(path)) {
+                        total -= size;
+                        evicted++;
+                    }
+                }
+            }
+            if (expired > 0 || evicted > 0) {
+                log.info("缩略图缓存清理：过期 {} 个、超量淘汰 {} 个，剩余 {} 个", expired, evicted, files.size() - evicted);
+            }
+        } catch (IOException e) {
+            log.warn("缩略图缓存清理失败: {}", e.getMessage());
+        }
+    }
+
+    private Path cacheDir() {
         AppProperties.Thumb config = appProperties.getThumb();
         Path dir = StringUtils.hasText(config.getCacheDir())
                 ? Paths.get(config.getCacheDir())
@@ -180,7 +300,11 @@ public class ThumbnailService {
         if (!dir.isAbsolute()) {
             dir = Paths.get(System.getProperty("user.dir")).resolve(dir);
         }
+        return dir.normalize();
+    }
+
+    private Path cacheFile(Long imageId, int width, String sourceHash) {
         String suffix = StringUtils.hasText(sourceHash) ? sourceHash.substring(0, Math.min(8, sourceHash.length())) : "nohash";
-        return dir.normalize().resolve(imageId + "-" + width + "-" + suffix + ".img");
+        return cacheDir().resolve(imageId + "-" + width + "-" + suffix + ".img");
     }
 }

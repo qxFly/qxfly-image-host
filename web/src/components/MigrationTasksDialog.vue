@@ -9,6 +9,21 @@
       <el-button size="small" :loading="loading" @click="load">刷新</el-button>
     </div>
 
+    <!-- 失败项：持久化保存，重启不丢，可一键重试（F5） -->
+    <div v-if="failures.length > 0" class="failure-panel">
+      <div class="failure-panel__head">
+        <span>失败项（已持久化，重启不丢）</span>
+        <el-tag size="small" type="danger" effect="plain">{{ failures.length }} 条</el-tag>
+        <div class="toolbar-spacer"></div>
+        <el-button size="small" type="primary" :loading="retrying" @click="retryFailures">一键重试</el-button>
+      </div>
+      <div v-for="item in failures" :key="item.imageId + '-' + item.toConfigId" class="failure-item">
+        <span class="failure-item__name" :title="item.originalName">{{ item.originalName }}</span>
+        <span class="text-muted">{{ item.reason || '未知原因' }}</span>
+        <span class="text-muted">{{ item.createdAt }}</span>
+      </div>
+    </div>
+
     <el-table v-loading="loading" :data="tasks" size="small" max-height="440" row-key="taskId">
       <el-table-column type="expand">
         <template #default="{ row }">
@@ -106,8 +121,8 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { cancelMigrate, fetchMigrateTasks } from '@/api/images'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { cancelMigrate, fetchMigrationFailures, fetchMigrateTasks, retryMigrationFailures } from '@/api/images'
 import { formatDate } from '@/utils/format'
 import type { MigrationTaskVO } from '@/types'
 
@@ -122,6 +137,18 @@ const visible = computed({
 })
 
 const tasks = ref<MigrationTaskVO[]>([])
+
+/** 已持久化的失败项（重启不丢），有失败时才显示 */
+interface MigrationFailureItem {
+  imageId: number
+  originalName: string
+  toConfigId: number
+  reason?: string
+  createdAt: string
+}
+
+const failures = ref<MigrationFailureItem[]>([])
+const retrying = ref(false)
 const loading = ref(false)
 let timer: number | undefined
 
@@ -153,6 +180,33 @@ async function load() {
     // 拦截器已提示
   } finally {
     loading.value = false
+  }
+  try {
+    failures.value = (await fetchMigrationFailures()).data
+  } catch {
+    // 拿不到失败项不影响任务列表
+  }
+}
+
+/** 一键重试：把持久化的失败项重新提交成一个迁移任务 */
+async function retryFailures() {
+  const confirmed = await ElMessageBox.confirm(
+    '将把 ' + failures.value.length + ' 条失败记录重新提交为一个新的迁移任务（按原目标迁移）。继续？',
+    '重试失败项',
+    { type: 'warning' },
+  ).catch(() => false)
+  if (!confirmed) {
+    return
+  }
+  retrying.value = true
+  try {
+    await retryMigrationFailures()
+    ElMessage.success('已提交重试任务，进度见任务列表')
+    await load()
+  } catch {
+    // 拦截器已提示
+  } finally {
+    retrying.value = false
   }
 }
 
@@ -276,4 +330,47 @@ function duration(row: any) {
 .fail {
   color: #f56c6c;
 }
+
+/* 迁移失败项面板（F5） */
+.failure-panel {
+  border: var(--jf-hair, 1px solid rgba(212, 212, 207, 0.4));
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: #fdf7f8;
+}
+
+.failure-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.failure-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.failure-item__name {
+  flex: 0 0 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 820px) {
+  .failure-item {
+    flex-wrap: wrap;
+  }
+
+  .failure-item__name {
+    flex: 0 0 100%;
+  }
+}
+
 </style>

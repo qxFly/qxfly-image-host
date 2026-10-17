@@ -29,12 +29,20 @@
       </el-card>
 
       <el-card v-else shadow="never">
+        <div class="toolbar" style="margin-bottom: 12px">
+          <span class="text-muted">共 {{ images.length }} 张</span>
+          <div class="toolbar-spacer"></div>
+          <el-button :loading="downloading" :disabled="images.length === 0" @click="downloadAlbum">
+            <el-icon><Download /></el-icon>&nbsp;打包下载全部
+          </el-button>
+        </div>
         <div v-loading="loading" class="share-grid">
           <el-image
             v-for="image in images"
             :key="image.id"
             class="share-tile"
             :src="image.thumbUrl || image.previewUrl || image.url"
+            :alt="image.originalName || '图片'"
             :preview-src-list="previewList"
             :initial-index="indexOf(image)"
             fit="cover"
@@ -60,13 +68,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { viewShare } from '@/api/shares'
+import { downloadShare, viewShare } from '@/api/shares'
+import { saveBlob } from '@/utils/download'
 import type { ShareVO } from '@/api/shares'
 import type { ImageVO } from '@/types'
 
 const route = useRoute()
 const loading = ref(false)
 const share = ref<ShareVO | null>(null)
+const downloading = ref(false)
 const images = ref<ImageVO[]>([])
 const password = ref('')
 const needPassword = ref(false)
@@ -79,6 +89,19 @@ const previewList = computed(() =>
 function indexOf(image: ImageVO) {
   const url = image.previewUrl || image.url || ''
   return Math.max(0, previewList.value.indexOf(url))
+}
+
+/** 打包下载整个相册（后端边取边写 zip） */
+async function downloadAlbum() {
+  downloading.value = true
+  try {
+    const blob = await downloadShare(String(route.params.token), password.value || undefined)
+    saveBlob(blob, (share.value?.title || 'share') + '.zip')
+  } catch {
+    // 拦截器已提示
+  } finally {
+    downloading.value = false
+  }
 }
 
 async function load() {

@@ -63,6 +63,10 @@ export interface StorageConfigVO {
   enabled: boolean
   /** 该类型是否支持列举已有文件（决定能否"从存储导入"） */
   supportsList?: boolean
+  /** 最近一次定时体检结果（未体检过为空） */
+  lastCheckOk?: boolean
+  lastCheckMessage?: string
+  lastCheckAt?: string
   remark?: string
   createdAt?: string
   updatedAt?: string

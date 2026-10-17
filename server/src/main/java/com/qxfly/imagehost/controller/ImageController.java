@@ -33,6 +33,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +51,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 图片接口。
@@ -95,9 +97,31 @@ public class ImageController {
                                                @RequestParam(required = false) String keyword,
                                                @RequestParam(required = false) Long storageConfigId,
                                                @RequestParam(required = false) String directory,
-                                               @RequestParam(required = false) String matchMode) {
-        return ApiResult.ok(imageService.page(SecurityUtils.currentUser(),
-                page, size, keyword, storageConfigId, directory, matchMode));
+                                               @RequestParam(required = false) String matchMode,
+                                               @RequestParam(required = false) Long minSize,
+                                               @RequestParam(required = false) Long maxSize,
+                                               @RequestParam(required = false) String dateFrom,
+                                               @RequestParam(required = false) String dateTo,
+                                               @RequestParam(required = false) Integer minWidth,
+                                               @RequestParam(required = false) Integer maxWidth,
+                                               @RequestParam(required = false) Integer minHeight,
+                                               @RequestParam(required = false) Integer maxHeight) {
+        com.qxfly.imagehost.dto.ImageQueryDTO query = new com.qxfly.imagehost.dto.ImageQueryDTO();
+        query.setPage(page);
+        query.setSize(size);
+        query.setKeyword(keyword);
+        query.setStorageConfigId(storageConfigId);
+        query.setDirectory(directory);
+        query.setMatchMode(matchMode);
+        query.setMinSize(minSize);
+        query.setMaxSize(maxSize);
+        query.setDateFrom(dateFrom);
+        query.setDateTo(dateTo);
+        query.setMinWidth(minWidth);
+        query.setMaxWidth(maxWidth);
+        query.setMinHeight(minHeight);
+        query.setMaxHeight(maxHeight);
+        return ApiResult.ok(imageService.page(SecurityUtils.currentUser(), query));
     }
 
     /** 目录树：按目录层级浏览图库 */
@@ -204,6 +228,26 @@ public class ImageController {
         return "attachment; filename=\"" + encoded + "\"; filename*=UTF-8''" + encoded;
     }
 
+    /** 导出图片元数据清单（仅超级管理员）：format=csv|json */
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportManifest(@RequestParam(defaultValue = "csv") String format) {
+        byte[] data = imageService.exportManifest(SecurityUtils.currentUser(), format);
+        String fileName = "images-" + java.time.LocalDate.now() + ("json".equalsIgnoreCase(format) ? ".json" : ".csv");
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"" + fileName + "\"")
+                .contentType(MediaType.parseMediaType("json".equalsIgnoreCase(format)
+                        ? "application/json; charset=UTF-8" : "text/csv; charset=UTF-8"))
+                .body(data);
+    }
+
+    /** 按清单回灌元数据（仅超级管理员）：只补库里没有的记录，不碰云端文件 */
+    @PostMapping("/import-manifest")
+    public ApiResult<Map<String, Object>> importManifest(@RequestBody Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) body.get("items");
+        return ApiResult.ok(imageService.importManifest(SecurityUtils.currentUser(), rows));
+    }
+
     @GetMapping("/stats")
     public ApiResult<StatsVO> stats() {
         return ApiResult.ok(imageService.stats(SecurityUtils.currentUser()));
@@ -288,6 +332,28 @@ public class ImageController {
     }
 
     /** 后台迁移任务列表（新的在前），用于任务面板 */
+    /** 已持久化的迁移失败项（重启不丢），给「后台任务」面板显示 */
+    @GetMapping("/migrate/failures")
+    public ApiResult<List<java.util.Map<String, Object>>> migrateFailures() {
+        return ApiResult.ok(migrationService.failures(SecurityUtils.currentUserId()));
+    }
+
+    /**
+     * 一键重试失败项：把已持久化的失败记录重新提交成一个迁移任务。
+     *
+     * @param toConfigId 只重试迁往某个目标的；不传则重试全部
+     */
+    @PostMapping("/migrate/retry")
+    public ApiResult<MigrationTaskVO> retryMigrate(
+            @RequestBody(required = false) com.qxfly.imagehost.dto.MigrateRequest request,
+            @RequestParam(required = false) Long toConfigId) {
+        String taskId = migrationService.retryFailures(SecurityUtils.currentUserId(), toConfigId, request);
+        if (taskId == null) {
+            throw new com.qxfly.imagehost.common.BizException("没有可重试的失败项");
+        }
+        return ApiResult.ok(migrationService.status(SecurityUtils.currentUserId(), taskId));
+    }
+
     @GetMapping("/migrate")
     public ApiResult<List<MigrationTaskVO>> migrateTasks() {
         return ApiResult.ok(migrationService.list(SecurityUtils.currentUserId()));

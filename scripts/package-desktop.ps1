@@ -19,19 +19,19 @@
     下载不通就用 -NoBundle 只出免安装 exe（功能完全一样）。
 
 .EXAMPLE
-    .\scripts\build-desktop.ps1
+    .\scripts\package-desktop.ps1
         完整打包（exe + NSIS/MSI 安装包）
 
 .EXAMPLE
-    .\scripts\build-desktop.ps1 -NoBundle
+    .\scripts\package-desktop.ps1 -NoBundle
         只出免安装 exe，不下载打包器（国内网络最稳）
 
 .EXAMPLE
-    .\scripts\build-desktop.ps1 -ApiBase https://img.example.com/api
+    .\scripts\package-desktop.ps1 -ApiBase https://img.example.com/api
         让客户端默认连这个后端（也可以打包后用环境变量 QXFLY_IMAGE_HOST_API_BASE 覆盖）
 
 .EXAMPLE
-    .\scripts\build-desktop.ps1 -BackendPort 8081
+    .\scripts\package-desktop.ps1 -BackendPort 8081
         后端在本机别的端口时用（等价于打包时写死 http://127.0.0.1:8081/api）
 #>
 [CmdletBinding()]
@@ -176,6 +176,6 @@ if ($copied.Count -eq 0) {
 }
 Write-Host ''
 Write-Info '免安装版双击 exe 即可运行；它只是一个外壳，图片仍由后端服务提供：'
-Write-Info '  本机后端：先跑 start.cmd（或 .\start.ps1），客户端默认连 127.0.0.1:8080'
+Write-Info '  本机后端：先跑 start.cmd（实现在 scripts\start-services.ps1），客户端默认连 127.0.0.1:8080'
 Write-Info '  远程后端：打包时用 -ApiBase，或运行时设置环境变量 QXFLY_IMAGE_HOST_API_BASE'
 Write-Host ''

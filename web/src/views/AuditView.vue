@@ -1,6 +1,6 @@
 <template>
   <div class="page" v-loading="loading">
-    <h2 class="page-title">审计日志</h2>
+    <PageHeader title="审计日志" subtitle="谁在什么时候做了什么，只记会改数据的操作与登录" />
 
     <el-card shadow="never">
       <template #header>
@@ -29,7 +29,34 @@
         </div>
       </template>
 
-      <el-table :data="rows" style="width: 100%">
+      <TableCardList
+        v-if="isMobile"
+        :rows="rows"
+        :fields="cardFields"
+        :loading="loading"
+        empty-text="没有日志"
+        empty-description="上传、删除、改配置等操作都会记录在这里"
+        empty-icon="Document"
+      >
+        <template #field-username="{ row }">
+          <span v-if="row.username">{{ row.username }}</span>
+          <span v-else class="text-muted">-</span>
+        </template>
+        <template #field-action="{ row }">
+          <el-tag size="small" effect="plain" :type="row.success === 1 ? 'primary' : 'danger'">
+            {{ labelOf(row.action) }}
+          </el-tag>
+        </template>
+        <template #field-targetType="{ row }">
+          <span v-if="row.targetType">{{ row.targetType }}#{{ row.targetId }}</span>
+          <span v-else class="text-muted">-</span>
+        </template>
+        <template #field-ip="{ row }">
+          <span class="mono">{{ row.ip || '-' }}</span>
+        </template>
+      </TableCardList>
+
+      <el-table v-else :data="rows" style="width: 100%">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column label="时间" width="170">
           <template #default="{ row }">{{ row.createdAt }}</template>
@@ -61,24 +88,17 @@
         </el-table-column>
       </el-table>
 
-      <div class="toolbar" style="margin-top: 12px; justify-content: center">
-        <el-pagination
-          background
-          layout="prev, pager, next, sizes, jumper, total"
-          :total="total"
-          :current-page="page"
-          :page-size="size"
-          :page-sizes="[20, 50, 100, 200]"
-          @current-change="load"
-          @size-change="onSizeChange"
-        />
-      </div>
+      <Pager :total="total" :page="page" :page-size="size" @change="onPagerChange" />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
+import PageHeader from '@/components/PageHeader.vue'
+import Pager from '@/components/Pager.vue'
+import TableCardList from '@/components/TableCardList.vue'
 import { onMounted, ref } from 'vue'
+import { useIsMobile } from '@/utils/responsive'
 import { fetchAuditLogs } from '@/api/audit'
 import type { AuditLogVO } from '@/types'
 
@@ -103,6 +123,19 @@ const ACTIONS = [
   { value: 'SETTINGS_UPDATE', label: '改系统设置' },
   { value: 'SHARE_CREATE', label: '创建分享' },
   { value: 'SHARE_DELETE', label: '取消分享' },
+  { value: 'STORAGE_CHECK', label: '存储体检失败' },
+]
+
+const isMobile = useIsMobile()
+
+/** 手机端卡片模式字段 */
+const cardFields = [
+  { label: '时间', prop: 'createdAt' },
+  { label: '操作者', prop: 'username' },
+  { label: '动作', prop: 'action' },
+  { label: '对象', prop: 'targetType' },
+  { label: '详情', prop: 'detail' },
+  { label: 'IP', prop: 'ip' },
 ]
 
 const loading = ref(false)
@@ -139,6 +172,15 @@ async function load(target?: number) {
   } finally {
     loading.value = false
   }
+}
+
+function onPagerChange(nextPage: number, nextSize: number) {
+  page.value = nextPage
+  if (size.value !== nextSize) {
+    size.value = nextSize
+    page.value = 1
+  }
+  load()
 }
 
 function onSizeChange(value: number) {

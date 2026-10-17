@@ -7,21 +7,21 @@
     除数据库外，运行所需环境全部取自项目根目录 runtime\，不依赖系统预装的 JDK / Node：
         runtime\win-x64\jdk    便携 JDK 17
         runtime\win-x64\node   便携 Node 20 LTS
-    runtime 缺失时会自动调用 scripts\setup-runtime.ps1 下载（加 -Offline 可禁止联网）。
+    runtime 缺失时会自动调用 scripts\setup-portable-runtime.ps1 下载（加 -Offline 可禁止联网）。
 
     流程：环境检查 -> 加载 config\local.env -> 数据库探测（MySQL 优先，连不上降级 H2）
     -> 后端增量编译 -> 启动后端并等待健康检查 -> 启动前端 -> 输出访问地址。
 
 .EXAMPLE
-    .\start.ps1                     # 开发模式：后端 + Vite 前端
-    .\start.ps1 -Mode prod          # 生产模式：单进程，界面由后端 jar 直接提供
-    .\start.ps1 -Database h2        # 强制使用 H2 内存库
-    .\start.ps1 -Target backend     # 只启动后端
-    .\start.ps1 -Target desktop     # 启动 Tauri 桌面端
-    .\start.ps1 -Offline            # 禁止联网下载运行时
-    .\start.ps1 -Action status      # 查看状态
-    .\start.ps1 -Action stop        # 停止
-    .\start.ps1 -BackendPort 8081 -WebPort 5174   # 改端口（也可写进 config\local.env）
+    .\start.cmd                     # 开发模式：后端 + Vite 前端
+    .\start.cmd -Mode prod          # 生产模式：单进程，界面由后端 jar 直接提供
+    .\start.cmd -Database h2        # 强制使用 H2 内存库
+    .\start.cmd -Target backend     # 只启动后端
+    .\start.cmd -Target desktop     # 启动 Tauri 桌面端
+    .\start.cmd -Offline            # 禁止联网下载运行时
+    .\start.cmd -Action status      # 查看状态
+    .\start.cmd -Action stop        # 停止
+    .\start.cmd -BackendPort 8081 -WebPort 5174   # 改端口（也可写进 config\local.env）
 #>
 [CmdletBinding()]
 param(
@@ -49,7 +49,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$Root        = $PSScriptRoot
+$Root        = Split-Path -Parent $PSScriptRoot
 if (-not $Root) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition }
 $ServerDir   = Join-Path $Root 'server'
 $WebDir      = Join-Path $Root 'web'
@@ -58,6 +58,12 @@ $ConfigDir   = Join-Path $Root 'config'
 $RuntimeDir  = Join-Path $Root 'runtime'
 $EnvFile     = Join-Path $ConfigDir 'local.env'
 $BackendJar  = Join-Path $ServerDir 'target\qxfly-image-host.jar'
+# 扁平的服务端包：jar 直接放在包根目录（上传即启动的那种）
+if (-not (Test-Path $BackendJar) -and (Test-Path (Join-Path $Root 'qxfly-image-host.jar'))) {
+    $BackendJar = Join-Path $Root 'qxfly-image-host.jar'
+}
+# 后端进程的工作目录：决定 uploads / thumbs / logs 落在哪里
+$BackendWorkDir = if (Test-Path $ServerDir) { $ServerDir } else { $Root }
 # 端口与访问地址在读完 config\local.env 之后由 Resolve-Ports 统一算出来
 $HealthUrl   = ''
 $WebUrl      = ''
@@ -66,6 +72,11 @@ $IsWin       = ($env:OS -eq 'Windows_NT')
 $script:StartedPids = @()
 $script:EffectiveDb = 'mysql'
 
+# 公共库：统一输出 / 进度日志 + trap / 编码安全的复制删除 / 端口与进程工具 / 脚本自检
+. (Join-Path $PSScriptRoot 'common-library.ps1')
+# 启动过程也留一份进度日志（出问题时 logs\start-*.log 能看到走到哪一步）
+$null = Initialize-ProgressLog -Name 'start' -LogDir $LogDir
+
 # ------------------------------------------------------------------ 输出
 function Write-Banner {
     Write-Host ''
@@ -73,11 +84,6 @@ function Write-Banner {
     Write-Host '     qxfly-image-host 多云端图床管理  ·  一键启动' -ForegroundColor White
     Write-Host '  ============================================================' -ForegroundColor DarkCyan
 }
-function Write-Step { param([string]$Text) Write-Host ('  [*] ' + $Text) -ForegroundColor Cyan }
-function Write-Ok   { param([string]$Text) Write-Host ('  [+] ' + $Text) -ForegroundColor Green }
-function Write-Warn { param([string]$Text) Write-Host ('  [!] ' + $Text) -ForegroundColor Yellow }
-function Write-Fail { param([string]$Text) Write-Host ('  [x] ' + $Text) -ForegroundColor Red }
-function Write-Info { param([string]$Text) Write-Host ('      ' + $Text) -ForegroundColor DarkGray }
 
 # java / mvn / npm / netstat 等原生程序会把正常输出写进 stderr。
 # 在 ErrorActionPreference='Stop' 下 PowerShell 5.1 会把它当终止性错误中断脚本，
@@ -129,7 +135,7 @@ function Install-RuntimeIfNeeded {
     $missing = (-not $Runtime.JavaHome) -or ($NeedNode -and -not $Runtime.NodeDir)
     if (-not $missing) { return $Runtime }
     if ($Offline) { Write-Warn 'runtime\ 缺少便携运行时，且已指定 -Offline'; return $Runtime }
-    $setup = Join-Path $Root 'scripts\setup-runtime.ps1'
+    $setup = Join-Path $Root 'scripts\setup-portable-runtime.ps1'
     if (Test-Path $setup) {
         Write-Step '首次运行：下载便携运行时到 runtime\（约 300MB，仅一次）...'
         & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $setup -Platform win
@@ -151,18 +157,22 @@ function Import-LocalEnv {
 
 # 端口优先级：命令行参数 > config\local.env（BACKEND_PORT / WEB_PORT）> 内置默认
 function Resolve-PortValue {
-    param([int]$Explicit, [string]$EnvName, [int]$Fallback)
+    param([int]$Explicit, [string]$EnvName, [int]$Fallback, [string]$AltEnvName = '')
     if ($Explicit -gt 0) { return $Explicit }
-    $text = [Environment]::GetEnvironmentVariable($EnvName, 'Process')
-    $parsed = 0
-    if ($text -and [int]::TryParse($text.Trim(), [ref]$parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
-        return $parsed
+    # 先看主键名，再看兼容键名（例如 BACKEND_PORT 优先，SERVER_PORT 也认）
+    foreach ($name in @($EnvName, $AltEnvName)) {
+        if (-not $name) { continue }
+        $text = [Environment]::GetEnvironmentVariable($name, 'Process')
+        $parsed = 0
+        if ($text -and [int]::TryParse($text.Trim(), [ref]$parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
+            return $parsed
+        }
     }
     return $Fallback
 }
 
 function Resolve-Ports {
-    $script:BackendPort = Resolve-PortValue -Explicit $BackendPort -EnvName 'BACKEND_PORT' -Fallback 8080
+    $script:BackendPort = Resolve-PortValue -Explicit $BackendPort -EnvName 'BACKEND_PORT' -AltEnvName 'SERVER_PORT' -Fallback 8080
     $script:WebPort     = Resolve-PortValue -Explicit $WebPort -EnvName 'WEB_PORT' -Fallback 5173
     $script:HealthUrl   = 'http://127.0.0.1:' + $script:BackendPort + '/actuator/health'
     $script:WebUrl      = 'http://localhost:' + $script:WebPort
@@ -310,14 +320,14 @@ function Test-Prerequisites {
     param([string]$Which, $Runtime)
     if ($Which -eq 'backend' -or $Which -eq 'all') {
         if (-not $Runtime.Java) {
-            Assert-Command -Name 'java' -Hint '请安装 JDK 17+，或先运行 scripts\setup-runtime.ps1 下载便携运行时'
+            Assert-Command -Name 'java' -Hint '请安装 JDK 17+，或先运行 scripts\setup-portable-runtime.ps1 下载便携运行时'
         }
         $javaLine = Invoke-Native { & $script:JavaExe -version 2>&1 } | Select-Object -First 1
         Write-Info ('Java   : ' + $javaLine)
     }
     if ($Which -eq 'web' -or $Which -eq 'desktop' -or $Which -eq 'all') {
         if (-not $Runtime.NodeDir) {
-            Assert-Command -Name 'npm' -Hint '请安装 Node.js 18+，或先运行 scripts\setup-runtime.ps1 下载便携运行时'
+            Assert-Command -Name 'npm' -Hint '请安装 Node.js 18+，或先运行 scripts\setup-portable-runtime.ps1 下载便携运行时'
         }
         $nodeLine = Invoke-Native { & $script:NodeExe -v 2>&1 } | Select-Object -First 1
         Write-Info ('Node   : ' + $nodeLine)
@@ -376,6 +386,11 @@ function Test-JarHasWeb {
 }
 
 function Test-NeedRebuild {
+    # 部署包（没有源码 / Maven 包装器）不可能就地编译：直接用现有 jar，绝不尝试重新编译
+    # （与 start.sh 的 jar_has_web / need_rebuild 保持一致，避免报出「找不到 Maven 包装器」这类无关错误）
+    $hasPom = Test-Path (Join-Path $ServerDir 'pom.xml')
+    $hasMvn = (Test-Path (Join-Path $ServerDir 'mvnw.cmd')) -or (Test-Path (Join-Path $ServerDir 'mvnw'))
+    if (-not $hasPom -or -not $hasMvn) { return $false }
     if ($Rebuild) { return $true }
     if (-not (Test-Path $BackendJar)) { return $true }
     if ($Mode -eq 'prod' -and -not (Test-JarHasWeb -Jar $BackendJar)) { return $true }
@@ -396,7 +411,11 @@ function Test-NeedRebuild {
 function Invoke-BackendBuild {
     $mvn = Join-Path $ServerDir 'mvnw.cmd'
     if (-not (Test-Path $mvn)) { $mvn = Join-Path $ServerDir 'mvnw' }
-    if (-not (Test-Path $mvn)) { throw ('找不到 Maven 包装器：' + $mvn) }
+    if (-not (Test-Path $mvn)) {
+        # 兜底：部署包里没有源码 / Maven，跳过编译用现有 jar，而不是报一个无关的错
+        Write-Warn '这是部署包（没有源码 / Maven 包装器），跳过编译，直接使用现有 jar'
+        return
+    }
 
     $buildArgs = @('-B', '-DskipTests')
     if ($Mode -eq 'prod') {
@@ -448,7 +467,7 @@ function Start-Backend {
 
     $stdout = Join-Path $LogDir 'backend.log'
     $stderr = Join-Path $LogDir 'backend.err.log'
-    $proc = Start-Process -FilePath $script:JavaExe -ArgumentList $javaArgLine -WorkingDirectory $ServerDir -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $proc = Start-Process -FilePath $script:JavaExe -ArgumentList $javaArgLine -WorkingDirectory $BackendWorkDir -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $script:StartedPids += $proc.Id
     Write-Info ('日志 : ' + $stdout)
 
@@ -590,7 +609,7 @@ function Show-Summary {
         Write-Host '   默认账号 : admin / admin123   （登录后请立即修改密码）' -ForegroundColor Yellow
     }
     Write-Host '  ------------------------------------------------------------' -ForegroundColor DarkCyan
-    Write-Host '   停止服务 : Ctrl+C   或   .\start.ps1 -Action stop' -ForegroundColor DarkGray
+    Write-Host '   停止服务 : Ctrl+C   或   .\start.cmd -Action stop' -ForegroundColor DarkGray
     Write-Host '   查看日志 : logs\backend.log   logs\web.log' -ForegroundColor DarkGray
     Write-Host ''
 }
@@ -598,10 +617,19 @@ function Show-Summary {
 # ================================================================== 主流程
 Write-Banner
 
-if (-not (Test-Path (Join-Path $ServerDir 'pom.xml')) -or -not (Test-Path (Join-Path $WebDir 'package.json'))) {
-    Write-Fail ('当前目录不像是 qxfly-image-host 项目根目录：' + $Root)
-    Write-Info '请把本脚本放在与 server、web 同级的位置后重试'
-    exit 1
+# 兼容两种布局：
+#   1) 源码仓库：有 server\pom.xml + web\package.json
+#   2) 打包出来的服务端包：只有 server\target\qxfly-image-host.jar（没有源码，也没有 web\）
+$hasSources = (Test-Path (Join-Path $ServerDir 'pom.xml')) -and (Test-Path (Join-Path $WebDir 'package.json'))
+if (-not $hasSources) {
+    if (-not (Test-Path $BackendJar)) {
+        Write-Fail ('当前目录既不是源码仓库，也不是服务端包：' + $Root)
+        Write-Info '源码仓库需要 server\pom.xml 与 web\package.json；服务端包需要 server\target\qxfly-image-host.jar'
+        exit 1
+    }
+    Write-Ok '检测到服务端包布局（只有 jar，没有源码）：自动按 -Mode prod -Target backend 启动'
+    $Mode = 'prod'
+    $Target = 'backend'
 }
 
 if ($Mode -eq 'prod' -and $Target -eq 'all') { $Target = 'backend' }
@@ -660,7 +688,7 @@ try {
             Start-Process $WebUrl
         }
 
-        Write-Host '  服务运行中，按 Ctrl+C 结束（或另开窗口执行 .\start.ps1 -Action stop）' -ForegroundColor Cyan
+        Write-Host '  服务运行中，按 Ctrl+C 结束（或另开窗口执行 .\start.cmd -Action stop）' -ForegroundColor Cyan
         Write-Host ''
         while ($true) {
             Start-Sleep -Seconds 3
@@ -672,7 +700,7 @@ try {
         if ($Mode -eq 'prod') {
             Start-BackendWithFallback -DbMode $DbMode -Detached
             if (-not $NoBrowser) { Start-Process ('http://127.0.0.1:' + $BackendPort) }
-            Write-Host '  服务运行中，按 Ctrl+C 结束（或另开窗口执行 .\start.ps1 -Action stop）' -ForegroundColor Cyan
+            Write-Host '  服务运行中，按 Ctrl+C 结束（或另开窗口执行 .\start.cmd -Action stop）' -ForegroundColor Cyan
             Write-Host ''
             while ($true) {
                 Start-Sleep -Seconds 3

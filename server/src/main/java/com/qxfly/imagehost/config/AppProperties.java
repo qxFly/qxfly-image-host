@@ -27,6 +27,16 @@ public class AppProperties {
     private Trash trash = new Trash();
     private LocalStorage localStorage = new LocalStorage();
     private Thumb thumb = new Thumb();
+    private Audit audit = new Audit();
+    private StorageCheck storageCheck = new StorageCheck();
+
+    @Data
+    public static class StorageCheck {
+        /** 是否开启存储后端定时体检（启动时 + 每 N 小时） */
+        private boolean enabled = true;
+        /** 体检间隔（小时） */
+        private int intervalHours = 6;
+    }
     /**
      * 本服务的对外基地址（例如 https://img.example.com），用于生成缩略图与本地存储直链。
      * 留空则用「当前请求的地址」，再不行退回 http://127.0.0.1:<server.port>。
@@ -110,6 +120,14 @@ public class AppProperties {
     }
 
     @Data
+    public static class Audit {
+        /** 审计日志保留天数，超过自动清理；0 或负数表示永久保留 */
+        private int retentionDays = 180;
+        /** 导出 CSV 时最多导多少行 */
+        private int exportMaxRows = 50000;
+    }
+
+    @Data
     public static class Thumb {
         /** 是否给没有原生缩略图的图片生成缩略图（本地缓存 + 签名直链） */
         private boolean enabled = true;
@@ -124,6 +142,10 @@ public class AppProperties {
          * 超过这个大小的图片不生成缩略图（原图要整份进内存，太大就退回原图直链）。
          */
         private long maxSourceSize = 20L * 1024 * 1024;
+        /** 缩略图缓存目录的总量上限（字节），超出按最久未使用淘汰；0 表示不限制 */
+        private long cacheMaxSize = 2L * 1024 * 1024 * 1024;
+        /** 缩略图缓存最长保留天数，超过就删；0 表示不按时间清理 */
+        private int cacheDays = 30;
     }
 
     @Data

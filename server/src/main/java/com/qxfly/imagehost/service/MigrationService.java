@@ -27,6 +27,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -63,6 +65,8 @@ public class MigrationService {
     private static final int MAX_TASKS_PER_USER = 50;
 
     private final ImageMapper imageMapper;
+    private final UserService userService;
+    private final com.qxfly.imagehost.mapper.MigrationFailureMapper migrationFailureMapper;
     private final StorageConfigService storageConfigService;
     private final StorageServiceFactory storageServiceFactory;
     private final ShardAllocator shardAllocator;
@@ -136,6 +140,117 @@ public class MigrationService {
         log.info("迁移任务 {} 已创建：{} 张，来源 {} -> {}，并发 {}",
                 task.id, images.size(), sourceName, target.getName(), task.concurrency);
         return toVO(task);
+    }
+
+    /**
+     * 持久化一条迁移失败记录（同图 + 同目标只留一条）。
+     * <p>
+     * 任务列表本身只在内存里，重启就没了；失败项单独落库，重启后仍可重试。
+     */
+    private void recordFailure(Long imageId, Long targetConfigId, String reason) {
+        try {
+            migrationFailureMapper.delete(com.baomidou.mybatisplus.core.toolkit.Wrappers
+                    .<com.qxfly.imagehost.entity.MigrationFailureEntity>lambdaQuery()
+                    .eq(com.qxfly.imagehost.entity.MigrationFailureEntity::getImageId, imageId)
+                    .eq(com.qxfly.imagehost.entity.MigrationFailureEntity::getToConfigId, targetConfigId));
+            var row = new com.qxfly.imagehost.entity.MigrationFailureEntity();
+            row.setImageId(imageId);
+            row.setToConfigId(targetConfigId);
+            row.setReason(reason != null && reason.length() > 250 ? reason.substring(0, 250) : reason);
+            migrationFailureMapper.insert(row);
+        } catch (Exception e) {
+            log.warn("记录迁移失败项失败 imageId={}: {}", imageId, e.getMessage());
+        }
+    }
+
+    /** 已持久化的失败项（含图片名，给「后台任务」面板显示） */
+    public java.util.List<java.util.Map<String, Object>> failures(Long userId) {
+        // 用实体取 id：H2/MySQL 的列大小写不同，直接拿 Map 的 key 不可靠
+        List<Long> imageIds = imageMapper.selectList(new QueryWrapper<ImageEntity>()
+                .select("id")
+                .eq("user_id", userId)
+                .last("LIMIT 1000000"))
+                .stream().map(ImageEntity::getId).filter(java.util.Objects::nonNull).toList();
+        if (imageIds.isEmpty()) {
+            return List.of();
+        }
+        List<com.qxfly.imagehost.entity.MigrationFailureEntity> rows = migrationFailureMapper
+                .selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers
+                        .<com.qxfly.imagehost.entity.MigrationFailureEntity>lambdaQuery()
+                        .in(com.qxfly.imagehost.entity.MigrationFailureEntity::getImageId, imageIds)
+                        .orderByDesc(com.qxfly.imagehost.entity.MigrationFailureEntity::getId)
+                        .last("LIMIT 200"));
+        if (rows.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, ImageEntity> byId = new HashMap<>();
+        for (ImageEntity image : imageMapper.selectList(new QueryWrapper<ImageEntity>()
+                .in("id", rows.stream()
+                        .map(com.qxfly.imagehost.entity.MigrationFailureEntity::getImageId)
+                        .distinct().toList())
+                .last("LIMIT 200"))) {
+            byId.put(image.getId(), image);
+        }
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (com.qxfly.imagehost.entity.MigrationFailureEntity row : rows) {
+            ImageEntity image = byId.get(row.getImageId());
+            if (image == null) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("imageId", row.getImageId());
+            item.put("originalName", image.getOriginalName());
+            item.put("toConfigId", row.getToConfigId());
+            item.put("reason", row.getReason());
+            item.put("createdAt", row.getCreatedAt());
+            result.add(item);
+        }
+        return result;
+    }
+
+    /**
+     * 一键重试：把已持久化的失败项重新提交成一个迁移任务。
+     *
+     * @param targetConfigId 只重试迁往某个目标的；为空则重试全部
+     * @return 新任务 id；没有可重试的项返回 null
+     */
+    public String retryFailures(Long userId, Long targetConfigId, com.qxfly.imagehost.dto.MigrateRequest request) {
+        var wrapper = com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<com.qxfly.imagehost.entity.MigrationFailureEntity>lambdaQuery()
+                .eq(targetConfigId != null,
+                        com.qxfly.imagehost.entity.MigrationFailureEntity::getToConfigId, targetConfigId);
+        List<com.qxfly.imagehost.entity.MigrationFailureEntity> rows = migrationFailureMapper.selectList(wrapper);
+        Set<Long> allowed = new HashSet<>(imageMapper.selectList(new QueryWrapper<ImageEntity>()
+                .select("id")
+                .eq("user_id", userId)
+                .last("LIMIT 1000000"))
+                .stream().map(ImageEntity::getId).filter(java.util.Objects::nonNull).toList());
+        List<Long> ids = rows.stream()
+                .map(com.qxfly.imagehost.entity.MigrationFailureEntity::getImageId)
+                .filter(allowed::contains)
+                .toList();
+        if (ids.isEmpty()) {
+            return null;
+        }
+        // 先把这批失败记录清掉：重试后成功的自然消失，仍失败的会重新写入
+        migrationFailureMapper.delete(com.baomidou.mybatisplus.core.toolkit.Wrappers
+                .<com.qxfly.imagehost.entity.MigrationFailureEntity>lambdaQuery()
+                .in(com.qxfly.imagehost.entity.MigrationFailureEntity::getImageId, ids));
+        com.qxfly.imagehost.dto.MigrateRequest retry = request != null ? request : new com.qxfly.imagehost.dto.MigrateRequest();
+        retry.setImageIds(ids);
+        retry.setMigrateAll(false);
+        if (retry.getTargetStorageConfigId() == null) {
+            // 没有显式指定目标时，按「原目标」重试：取这批失败记录里的 toConfigId
+            Long fallback = targetConfigId != null ? targetConfigId : rows.stream()
+                    .map(com.qxfly.imagehost.entity.MigrationFailureEntity::getToConfigId)
+                    .filter(java.util.Objects::nonNull)
+                    .findFirst().orElse(null);
+            if (fallback == null) {
+                return null;
+            }
+            retry.setTargetStorageConfigId(fallback);
+        }
+        return start(userId, retry).getTaskId();
     }
 
     /** 当前用户的迁移任务列表（新的在前），用于后台任务面板 */
@@ -324,6 +439,7 @@ public class MigrationService {
                     task.failed.incrementAndGet();
                     task.done.incrementAndGet();
                     task.recordError(image.getOriginalName(), "仓库里找不到该文件（可能已被移动或删除）");
+                    recordFailure(image.getId(), targetSetting.configId(), "仓库里找不到该文件（可能已被移动或删除）");
                     continue;
                 }
                 String newKey = keyBuilder.next(image, sourceSetting, task);
@@ -424,6 +540,7 @@ public class MigrationService {
         } catch (Exception e) {
             task.failed.incrementAndGet();
             task.recordError(image.getOriginalName(), e.getMessage());
+            recordFailure(image.getId(), targetConfig.getId(), e.getMessage());
             log.debug("迁移失败 id={} key={}: {}", image.getId(), image.getObjectKey(), e.getMessage());
         } finally {
             task.done.incrementAndGet();

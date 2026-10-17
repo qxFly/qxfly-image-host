@@ -1,6 +1,6 @@
 <template>
   <div class="page" v-loading="loading">
-    <h2 class="page-title">重复图片</h2>
+    <PageHeader title="重复图片" subtitle="按内容 sha256 分组，只列完全相同的图片" />
 
     <el-card shadow="never">
       <template #header>
@@ -10,25 +10,54 @@
           <el-tag v-if="result" type="warning" effect="plain">
             共 {{ result.total }} 组，可回收 {{ formatSize(result.wastedSize) }}
           </el-tag>
+          <el-select v-model="keepStrategy" style="width: 130px; margin-right: 8px">
+            <el-option v-for="item in KEEP_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
           <el-button
             type="danger"
             :disabled="!result || result.total === 0"
             :loading="working"
             @click="cleanupAll"
           >
-            全部清理（每组保留最早一张）
+            全部清理（每组保留{{ keepLabel }}）
           </el-button>
           <el-button :loading="loading" @click="load(page)">刷新</el-button>
         </div>
       </template>
 
+      <div class="dup-filters">
+        <el-select
+          v-model="filterStorageConfigId"
+          placeholder="全部存储后端"
+          clearable
+          style="width: 180px"
+          @change="load(1)">
+          <el-option v-for="item in configs" :key="item.id" :label="item.name" :value="item.id" />
+        </el-select>
+        <el-input
+          v-model="filterDirectory"
+          placeholder="目录前缀，如 images/2026/"
+          clearable
+          style="width: 220px"
+          @keyup.enter="load(1)"
+          @clear="load(1)" />
+        <el-button type="primary" @click="load(1)">筛选</el-button>
+        <el-button @click="resetFilters">重置</el-button>
+      </div>
+
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
         <template #title>清理是「移入回收站」，不是物理删除</template>
-        每组保留**最早上传**的那张（最可能是图库在用的记录），其余移入回收站；
+        每组保留一张（可选<strong>最早上传 / 最新上传 / 最大文件</strong>），其余移入回收站；
         确认无误后再去回收站彻底删除，误判还能恢复。只比对内容完全相同的文件，不做相似图检测。
       </el-alert>
 
-      <el-empty v-if="!result || result.total === 0" description="没有发现重复图片" :image-size="80" />
+      <ListSkeleton v-if="loading && !result" :rows="4" />
+
+      <EmptyState
+        v-else-if="!result || result.total === 0"
+        icon="CopyDocument"
+        title="没有发现重复图片"
+        description="只比对内容完全相同的文件；重复通常来自多次导入或跨平台迁移" />
 
       <div v-for="group in result ? result.groups : []" :key="group.hash" class="dup-group">
         <div class="dup-group__head">
@@ -39,12 +68,12 @@
           </span>
           <div class="toolbar-spacer"></div>
           <el-button size="small" type="danger" plain :loading="working" @click="cleanupOne(group)">
-            只保留最早一张
+            只保留{{ keepLabel }}
           </el-button>
         </div>
         <div class="dup-group__list">
           <div v-for="image in group.images" :key="image.id" class="dup-item" :class="{ 'is-keep': image.keep }">
-            <el-image class="dup-item__thumb" :src="thumbOf(image)" fit="cover" :preview-src-list="[thumbOf(image)]" />
+            <el-image class="dup-item__thumb" :src="thumbOf(image)" :alt="image.originalName || '图片'" fit="cover" :preview-src-list="[thumbOf(image)]" />
             <div class="dup-item__meta">
               <span class="dup-item__name" :title="image.originalName || image.objectKey">
                 {{ image.originalName || image.objectKey }}
@@ -56,25 +85,42 @@
         </div>
       </div>
 
-      <div v-if="result && result.pages > 1" class="toolbar" style="justify-content: center; margin-top: 12px">
-        <el-pagination
-          background
-          layout="prev, pager, next, total"
-          :total="result.total"
-          :current-page="page"
-          :page-size="size"
-          @current-change="load"
-        />
-      </div>
+      <Pager v-if="result && result.pages > 1" :total="result.total" :page="page" :page-size="size" layout="prev, pager, next, total" @change="onPagerChange" />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import EmptyState from '@/components/EmptyState.vue'
+import ListSkeleton from '@/components/ListSkeleton.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import Pager from '@/components/Pager.vue'
+import { fetchStorageConfigs } from '@/api/storage'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { cleanupDuplicates, fetchDuplicates, type DuplicateGroup, type DuplicateResult } from '@/api/duplicates'
+import {
+  cleanupDuplicates,
+  fetchDuplicates,
+  type DuplicateGroup,
+  type DuplicateResult,
+  type KeepStrategy,
+} from '@/api/duplicates'
 import { formatSize } from '@/utils/format'
+
+/** 保留策略：最早上传 / 最新上传 / 最大文件（内容都一样，差别只是留哪条记录） */
+const KEEP_OPTIONS: { value: KeepStrategy; label: string }[] = [
+  { value: 'earliest', label: '最早上传' },
+  { value: 'latest', label: '最新上传' },
+  { value: 'largest', label: '最大文件' },
+]
+
+const keepStrategy = ref<KeepStrategy>('earliest')
+const keepLabel = computed(() => KEEP_OPTIONS.find((item) => item.value === keepStrategy.value)?.label ?? '最早上传')
+
+/** 筛选：只看某个存储后端 / 目录前缀 */
+const filterStorageConfigId = ref<number | undefined>(undefined)
+const filterDirectory = ref('')
+const configs = ref<{ id: number; name: string }[]>([])
 
 const loading = ref(false)
 const working = ref(false)
@@ -98,7 +144,9 @@ async function load(target?: number) {
   }
   loading.value = true
   try {
-    result.value = (await fetchDuplicates(page.value, size.value)).data
+      result.value = (
+      await fetchDuplicates(page.value, size.value, filterStorageConfigId.value, filterDirectory.value || undefined)
+    ).data
   } catch {
     // 拦截器已提示
   } finally {
@@ -108,13 +156,13 @@ async function load(target?: number) {
 
 async function cleanupOne(group: DuplicateGroup) {
   await ElMessageBox.confirm(
-    '这一组的 ' + group.count + ' 张里，只保留最早的那张，其余 ' + (group.count - 1) + ' 张移入回收站。继续？',
+    '这一组的 ' + group.count + ' 张里，只保留' + keepLabel.value + '的那张，其余 ' + (group.count - 1) + ' 张移入回收站。继续？',
     '清理重复图片',
     { type: 'warning' },
   )
   working.value = true
   try {
-    const moved = (await cleanupDuplicates(group.hash)).data
+    const moved = (await cleanupDuplicates(keepStrategy.value, group.hash)).data
     ElMessage.success('已把 ' + moved + ' 张移入回收站')
     await load(page.value)
   } catch {
@@ -124,16 +172,31 @@ async function cleanupOne(group: DuplicateGroup) {
   }
 }
 
+function onPagerChange(nextPage: number, nextSize: number) {
+  page.value = nextPage
+  if (size.value !== nextSize) {
+    size.value = nextSize
+    page.value = 1
+  }
+  load()
+}
+
+function resetFilters() {
+  filterStorageConfigId.value = undefined
+  filterDirectory.value = ''
+  load(1)
+}
+
 async function cleanupAll() {
   const total = result.value ? result.value.total : 0
   await ElMessageBox.confirm(
-    '将对全部 ' + total + ' 组执行清理：每组保留最早的一张，其余移入回收站。继续？',
+    '将对全部 ' + total + ' 组执行清理：每组保留' + keepLabel.value + '的一张，其余移入回收站。继续？',
     '全部清理',
     { type: 'warning' },
   )
   working.value = true
   try {
-    const moved = (await cleanupDuplicates()).data
+    const moved = (await cleanupDuplicates(keepStrategy.value, undefined, filterStorageConfigId.value)).data
     ElMessage.success('已把 ' + moved + ' 张移入回收站，可在回收站确认后再彻底删除')
     await load(1)
   } catch {
@@ -143,7 +206,14 @@ async function cleanupAll() {
   }
 }
 
-onMounted(() => load(1))
+onMounted(async () => {
+  try {
+    configs.value = (await fetchStorageConfigs()).data.map((item) => ({ id: item.id, name: item.name }))
+  } catch {
+    // 拿不到后端列表就只支持关键字筛选
+  }
+  load(1)
+})
 </script>
 
 <style scoped>
@@ -203,4 +273,21 @@ onMounted(() => load(1))
   text-overflow: ellipsis;
   max-width: 260px;
 }
+
+/* 重复图片：筛选行（F7） */
+.dup-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 820px) {
+  .dup-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 </style>

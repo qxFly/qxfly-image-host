@@ -11,6 +11,7 @@ import com.qxfly.imagehost.entity.StorageConfigEntity;
 import com.qxfly.imagehost.security.SecurityUtils;
 import com.qxfly.imagehost.service.ImageService;
 import com.qxfly.imagehost.service.StorageCdnService;
+import com.qxfly.imagehost.service.StorageCheckService;
 import com.qxfly.imagehost.service.StorageConfigService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,7 @@ public class StorageConfigController {
 
     private final StorageConfigService storageConfigService;
     private final StorageCdnService storageCdnService;
+    private final com.qxfly.imagehost.service.StorageCheckService storageCheckService;
     private final ImageService imageService;
 
     /** 支持的存储类型及表单字段定义 */
@@ -50,7 +52,23 @@ public class StorageConfigController {
 
     @GetMapping
     public ApiResult<List<StorageConfigVO>> list() {
-        return ApiResult.ok(storageConfigService.list(SecurityUtils.currentUserId()));
+        List<StorageConfigVO> list = storageConfigService.list(SecurityUtils.currentUserId());
+        // 附带最近一次定时体检的结果（前端显示成健康标签）
+        for (StorageConfigVO vo : list) {
+            StorageCheckService.CheckResult result = storageCheckService.resultOf(vo.getId());
+            if (result != null) {
+                vo.setLastCheckOk(result.ok());
+                vo.setLastCheckMessage(result.message());
+                vo.setLastCheckAt(result.checkedAt());
+            }
+        }
+        return ApiResult.ok(list);
+    }
+
+    /** 手动触发一次体检（把启用的配置全部真测一遍） */
+    @PostMapping("/check")
+    public ApiResult<java.util.Map<Long, StorageCheckService.CheckResult>> checkNow() {
+        return ApiResult.ok(storageCheckService.checkNow());
     }
 
     @PostMapping

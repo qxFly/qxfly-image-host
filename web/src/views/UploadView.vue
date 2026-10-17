@@ -28,7 +28,7 @@
         :on-change="onFileChange"
         :accept="accept"
       >
-        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+        <el-icon class="el-icon--upload" aria-hidden="true"><UploadFilled /></el-icon>
         <div class="el-upload__text">拖拽图片到此处，或 <em>点击选择文件</em></div>
         <template #tip>
           <div class="el-upload__tip">
@@ -58,7 +58,57 @@
         </div>
       </template>
 
-      <el-empty v-if="store.tasks.length === 0" description="还没有上传记录，拖拽文件到上面即可开始" :image-size="80" />
+      <EmptyState
+        v-if="store.tasks.length === 0"
+        icon="UploadFilled"
+        title="还没有上传记录"
+        description="拖拽文件到上面即可开始；上传会实时显示进度、速度与预计剩余时间" />
+      <TableCardList
+        v-else-if="isMobile"
+        :rows="store.tasks"
+        :fields="cardFields"
+        :id-key="'id'"
+        empty-text="还没有上传记录"
+        empty-description="拖拽文件到上面即可开始"
+        empty-icon="UploadFilled"
+      >
+        <template #field-name="{ row }">
+          <span>{{ row.name }}</span>
+          <span class="text-muted">　{{ formatSize(row.size) }}</span>
+        </template>
+        <template #field-status="{ row }">
+          <el-tooltip :disabled="!row.error" :content="row.error || ''" placement="top">
+            <el-tag size="small" effect="plain" :type="statusTag(row)">{{ statusText(row) }}</el-tag>
+          </el-tooltip>
+        </template>
+        <template #field-progress="{ row }">
+          <el-progress
+            :percentage="row.progress"
+            :status="row.status === 'failed' ? 'exception' : row.status === 'success' ? 'success' : undefined"
+            :stroke-width="8" />
+        </template>
+        <template #field-speed="{ row }">{{ formatSpeed(row.speed) }}</template>
+        <template #field-eta="{ row }">{{ row.status === 'uploading' ? formatDuration(row.eta) : '—' }}</template>
+        <template #field-storage="{ row }">
+          <el-tag v-if="row.storageTypeLabel" size="small" effect="plain">{{ row.storageTypeLabel }}</el-tag>
+          <span v-else class="text-muted">—</span>
+        </template>
+        <template #actions="{ row }">
+          <template v-if="row.status === 'pending' || row.status === 'uploading'">
+            <el-button size="small" link type="danger" @click="store.cancel(row.id)">取消</el-button>
+          </template>
+          <template v-else-if="row.status === 'failed' || row.status === 'canceled'">
+            <el-button size="small" link type="primary" :disabled="!store.canRetry(row.id)" @click="store.retry(row.id)">重试</el-button>
+          </template>
+          <template v-else>
+            <el-button size="small" link type="primary" @click="copy(row.copyUrl || row.url, '图片直链')">直链</el-button>
+            <el-button size="small" link type="primary" @click="copy(markdownOf(row), 'Markdown')">MD</el-button>
+            <el-button size="small" link type="success" @click="open(row.previewUrl || row.url)">打开</el-button>
+          </template>
+          <el-button size="small" link @click="store.remove(row.id)">移除</el-button>
+        </template>
+      </TableCardList>
+
       <el-table v-else :data="store.tasks" size="small" style="width: 100%">
         <el-table-column label="文件" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">
@@ -133,12 +183,24 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, type UploadFile, type UploadInstance } from 'element-plus'
 import { fetchStorageConfigs } from '@/api/storage'
 import { fetchSystemInfo } from '@/api/system'
+import EmptyState from '@/components/EmptyState.vue'
+import TableCardList from '@/components/TableCardList.vue'
 import { useUploadStore, type UploadTask } from '@/stores/upload'
 import { copyText, formatDuration, formatSize, formatSpeed } from '@/utils/format'
 import type { StorageConfigVO } from '@/types'
 
 const store = useUploadStore()
 const isMobile = useIsMobile()
+
+/** 手机端卡片模式字段 */
+const cardFields = [
+  { label: '文件', prop: 'name' },
+  { label: '状态', prop: 'status' },
+  { label: '进度', prop: 'progress' },
+  { label: '速度', prop: 'speed' },
+  { label: '剩余', prop: 'eta' },
+  { label: '存储', prop: 'storageTypeLabel' },
+]
 const uploadRef = ref<UploadInstance>()
 const configs = ref<StorageConfigVO[]>([])
 const selectedConfigId = ref<number | undefined>(undefined)

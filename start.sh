@@ -25,6 +25,13 @@ RUNTIME_DIR="$ROOT/runtime"
 CACHE_DIR="$RUNTIME_DIR/_cache"
 ENV_FILE="$CONFIG_DIR/local.env"
 BACKEND_JAR="$SERVER_DIR/target/qxfly-image-host.jar"
+# 扁平的服务端包：jar 直接放在包根目录（上传即启动的那种）
+if [ ! -f "$BACKEND_JAR" ] && [ -f "$ROOT/qxfly-image-host.jar" ]; then
+  BACKEND_JAR="$ROOT/qxfly-image-host.jar"
+fi
+# 后端进程的工作目录：决定 uploads/ thumbs/ logs/ 落在哪里
+WORK_DIR="$SERVER_DIR"
+[ -d "$WORK_DIR" ] || WORK_DIR="$ROOT"
 # 端口优先级：命令行参数 / 环境变量 > config/local.env > 默认 8080 / 5173
 DEFAULT_BACKEND_PORT=8080
 DEFAULT_WEB_PORT=5173
@@ -33,6 +40,9 @@ PRESET_BACKEND_PORT="${BACKEND_PORT:-}"
 PRESET_WEB_PORT="${WEB_PORT:-}"
 BACKEND_PORT="$DEFAULT_BACKEND_PORT"
 WEB_PORT="$DEFAULT_WEB_PORT"
+# 记录 config/local.env 里到底写了哪个键（BACKEND_PORT 优先，SERVER_PORT 兼容）
+BACKEND_PORT_FROM_FILE=""
+SERVER_PORT_FROM_FILE=""
 HEALTH_URL=""
 # JVM 参数：环境变量 / config.local.env 里的 JAVA_OPTS 优先（单张无上限时全程流式，堆不用很大）
 DEFAULT_JAVA_OPTS="-Xms256m -Xmx1g -XX:+UseG1GC"
@@ -240,25 +250,41 @@ cleanup() {
 # ------------------------------------------------------------ 数据库
 load_local_env() {
   if [ ! -f "$ENV_FILE" ]; then return 1; fi
-  while IFS= read -r line; do
+  # CRLF 行尾检测：Windows 上编辑过的文件在 Linux 上会把 \r 带进值里
+  # CRLF 检测用 bash 原生的 $'\r'（Ubuntu 的 mawk 不把 \r 当转义，不能用 awk 判断）
+  if [ -n "$(tr -d -c '\r' < "$ENV_FILE")" ]; then
+    warn 'config/local.env 是 Windows(CRLF) 行尾，已自动按 LF 解析（建议另存为 LF）'
+  fi
+  # \r 必须去掉：否则 MYSQL_HOST / MYSQL_PORT / MYSQL_DATABASE 的值会被污染，
+  # JDBC URL 里混入 \r，应用启动就报 "Driver com.mysql.cj.jdbc.Driver claims to not accept jdbcUrl"。
+  # 这里用 awk 统一去掉行尾 \r（值解析不走管道，避免平台差异）
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       \#*|'') continue ;;
     esac
-    key="$(printf '%s' "$line" | cut -d= -f1 | tr -d ' ')"
-    value="$(printf '%s' "$line" | cut -d= -f2-)"
+    key="${line%%=*}"; value="${line#*=}"
+    key="$(printf '%s' "$key" | tr -d ' ')"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
     case "$key" in
       MYSQL_HOST|MYSQL_PORT|MYSQL_DATABASE|MYSQL_USER|MYSQL_PASSWORD) export "$key=$value" ;;
-      BACKEND_PORT) BACKEND_PORT="$value" ;;
+      BACKEND_PORT) BACKEND_PORT="$value"; BACKEND_PORT_FROM_FILE=1 ;;
+      # 兼容 Spring 习惯的 SERVER_PORT（旧模板写的就是它；BACKEND_PORT 优先）
+      SERVER_PORT) SERVER_PORT_FROM_FILE="$value" ;;
       WEB_PORT) WEB_PORT="$value" ;;
       JAVA_OPTS) JAVA_OPTS="$value" ;;
     esac
-  done < "$ENV_FILE"
+  done < <(tr -d '\r' < "$ENV_FILE")
   return 0
 }
 
 # 端口最终确定：命令行里显式给的优先，其次 local.env，最后默认值
 resolve_ports() {
   if [ -n "$PRESET_BACKEND_PORT" ]; then BACKEND_PORT="$PRESET_BACKEND_PORT"; fi
+  # local.env 只写了 SERVER_PORT 时也生效（前提：没写 BACKEND_PORT，命令行也没给）
+  if [ -z "$PRESET_BACKEND_PORT" ] && [ -z "$BACKEND_PORT_FROM_FILE" ] && [ -n "$SERVER_PORT_FROM_FILE" ]; then
+    BACKEND_PORT="$SERVER_PORT_FROM_FILE"
+  fi
   if [ -n "$PRESET_WEB_PORT" ]; then WEB_PORT="$PRESET_WEB_PORT"; fi
   case "$BACKEND_PORT" in ''|*[!0-9]*) BACKEND_PORT="$DEFAULT_BACKEND_PORT" ;; esac
   case "$WEB_PORT" in ''|*[!0-9]*) WEB_PORT="$DEFAULT_WEB_PORT" ;; esac
@@ -301,12 +327,24 @@ mysql_service_name() {
 }
 
 # ------------------------------------------------------------ 后端
+# jar 里是否含打进去的前端界面。
+# 不用只依赖 unzip：精简的 Ubuntu 常常没装它，命令失败会被误判成「jar 过期、需要重新编译」，
+# 于是脚本跑去找 Maven，报出「找不到 Maven 包装器」这种和实际无关的错误。
+jar_has_web() {
+  if command -v unzip >/dev/null 2>&1; then
+    if unzip -l "$1" 2>/dev/null | grep -q 'BOOT-INF/classes/static/index.html'; then return 0; fi
+  fi
+  # 兜底：zip 的条目名以明文存在文件里，直接 grep 即可（无需任何解压工具）
+  LC_ALL=C grep -qa 'BOOT-INF/classes/static/index.html' "$1" 2>/dev/null && return 0
+  return 1
+}
+
 need_rebuild() {
   if [ ! -f "$BACKEND_JAR" ]; then return 0; fi
-  if [ "$MODE" = "prod" ]; then
-    if ! unzip -l "$BACKEND_JAR" 2>/dev/null | grep -q 'BOOT-INF/classes/static/index.html'; then
-      return 0
-    fi
+  # 部署包（没有源码或没有 Maven 包装器）不可能就地编译：直接用现有 jar，绝不尝试重新编译
+  if [ ! -f "$SERVER_DIR/pom.xml" ] || [ ! -f "$SERVER_DIR/mvnw" ]; then return 1; fi
+  if [ "$MODE" = "prod" ] && ! jar_has_web "$BACKEND_JAR"; then
+    return 0
   fi
   if [ -n "$(find "$SERVER_DIR/src" "$SERVER_DIR/pom.xml" -newer "$BACKEND_JAR" -print -quit 2>/dev/null)" ]; then
     return 0
@@ -316,7 +354,11 @@ need_rebuild() {
 
 build_backend() {
   local mvn="$SERVER_DIR/mvnw"
-  if [ ! -f "$mvn" ]; then fail "找不到 Maven 包装器：$mvn"; exit 1; fi
+  if [ ! -f "$mvn" ]; then
+    # 兜底：部署包里没有源码 / Maven，直接跳过编译用现有 jar，而不是报一个无关的错
+    warn "这是部署包（没有源码 / Maven 包装器），跳过编译，直接使用现有 jar"
+    return 0
+  fi
   chmod +x "$mvn" 2>/dev/null || true
 
   if [ "$MODE" = "prod" ]; then
@@ -344,7 +386,7 @@ start_backend() {
 
   step "启动后端（$DATABASE 模式，端口 $BACKEND_PORT）..."
   # JAVA_OPTS 有意不加引号：里面的多个参数要按空格拆开传给 java
-  (cd "$SERVER_DIR" && exec java $JAVA_OPTS -Dfile.encoding=UTF-8 -jar "$BACKEND_JAR" $extra) >"$LOG_DIR/backend.log" 2>&1 &
+  (cd "$WORK_DIR" && exec java $JAVA_OPTS -Dfile.encoding=UTF-8 -jar "$BACKEND_JAR" $extra) >"$LOG_DIR/backend.log" 2>&1 &
   BACKEND_PID=$!
   info "日志 : $LOG_DIR/backend.log"
 
@@ -433,7 +475,10 @@ show_status() {
 show_summary() {
   echo
   printf '%s  ------------------------------------------------------------%s\n' "$C_CYAN" "$C_RESET"
-  printf '%s   后端接口 : http://127.0.0.1:%s    [数据库 %s]%s\n' "$C_WHITE" "$BACKEND_PORT" "$EFFECTIVE_DB" "$C_RESET"
+  # 横幅在后端启动之前打印，此时 EFFECTIVE_DB 还是初始猜测值；显式指定 -Database 时按指定值显示
+  local db_label="$DATABASE"
+  if [ "$db_label" = "auto" ]; then db_label="$EFFECTIVE_DB"; fi
+  printf '%s   后端接口 : http://127.0.0.1:%s    [数据库 %s]%s\n' "$C_WHITE" "$BACKEND_PORT" "$db_label" "$C_RESET"
   if [ "$MODE" = "prod" ]; then
     printf '%s   管理界面 : http://127.0.0.1:%s   （单进程，界面已打进 jar）%s\n' "$C_WHITE" "$BACKEND_PORT" "$C_RESET"
   else
@@ -449,9 +494,18 @@ show_summary() {
 # ============================================================ 主流程
 banner
 
+# 兼容两种布局：
+#   1) 源码仓库：有 server/pom.xml + web/package.json
+#   2) 打包出来的服务端包：只有 qxfly-image-host.jar（没有源码，也没有 web/）
 if [ ! -f "$SERVER_DIR/pom.xml" ] || [ ! -f "$WEB_DIR/package.json" ]; then
-  fail "当前目录不像是 qxfly-image-host 项目根目录：$ROOT"
-  exit 1
+  if [ ! -f "$BACKEND_JAR" ]; then
+    fail "当前目录既不是源码仓库，也不是服务端包：$ROOT"
+    info "源码仓库需要 server/pom.xml 与 web/package.json；服务端包需要 qxfly-image-host.jar"
+    exit 1
+  fi
+  ok '检测到服务端包布局（只有 jar，没有源码）：自动按 -Mode prod -Target backend 启动'
+  MODE="prod"
+  TARGET="backend"
 fi
 
 mkdir -p "$LOG_DIR"

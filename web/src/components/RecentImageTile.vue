@@ -5,6 +5,7 @@
         v-if="src"
         class="recent-tile__image"
         :src="src"
+        :alt="image.originalName || '图片'"
         fit="cover"
         :preview-src-list="[image.previewUrl || image.url]"
         preview-teleported
@@ -116,7 +117,7 @@ const tooltip = computed(() => {
 .recent-tile:hover {
   transform: translateY(-2px);
   border-color: #e3e8f0;
-  box-shadow: 0 8px 20px rgba(31, 42, 68, 0.12);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.06);
 }
 
 .recent-tile__thumb {

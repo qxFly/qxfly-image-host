@@ -20,6 +20,7 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 分享链接（相册）。
@@ -37,7 +38,11 @@ public class ShareService {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int MAX_IMAGES = 2000;
 
+    /** 每条分享最多保留多少条访问明细（防止被刷爆） */
+    private static final int MAX_VIEWS_PER_SHARE = 200;
+
     private final ShareLinkMapper shareLinkMapper;
+    private final com.qxfly.imagehost.mapper.ShareViewMapper shareViewMapper;
     private final ImageMapper imageMapper;
     private final ImageService imageService;
     private final UserService userService;
@@ -107,6 +112,61 @@ public class ShareService {
      */
     @Transactional
     public ShareVO view(String token, String password) {
+        ShareLinkEntity entity = resolve(token, password);
+        long views = (entity.getViewCount() == null ? 0L : entity.getViewCount()) + 1;
+        shareLinkMapper.update(null, Wrappers.<ShareLinkEntity>lambdaUpdate()
+                .eq(ShareLinkEntity::getId, entity.getId())
+                .set(ShareLinkEntity::getViewCount, views));
+        // 返回自增后的值，否则前端看到的还是上一次的访问数
+        entity.setViewCount(views);
+        // 访问明细：谁在什么时候打开过（尽力记录，失败不影响访问）
+        recordView(entity.getId());
+        return toVO(entity, true);
+    }
+
+    /**
+     * 公开访问相册的打包下载：校验密码与有效期后返回相册里的图片实体，
+     * 由控制器交给 {@code ImageDownloadService.writeZip} 流式打包。
+     */
+    public List<ImageEntity> resolveDownload(String token, String password) {
+        ShareLinkEntity entity = resolve(token, password);
+        List<Long> ids = readIds(entity.getImageIds());
+        if (ids.isEmpty()) {
+            throw BizException.notFound("该相册还没有图片");
+        }
+        recordView(entity.getId());
+        // 只取在用的图片；分享创建后被删掉的自然不在包里
+        List<ImageEntity> rows = imageMapper.selectList(Wrappers.<ImageEntity>lambdaQuery()
+                .in(ImageEntity::getId, ids)
+                .eq(ImageEntity::getDeleted, 0));
+        Map<Long, ImageEntity> byId = new java.util.HashMap<>();
+        for (ImageEntity row : rows) {
+            byId.put(row.getId(), row);
+        }
+        List<ImageEntity> ordered = new ArrayList<>(ids.size());
+        for (Long id : ids) {
+            ImageEntity image = byId.get(id);
+            if (image != null) {
+                ordered.add(image);
+            }
+        }
+        if (ordered.isEmpty()) {
+            throw BizException.notFound("该相册里的图片都已被删除");
+        }
+        return ordered;
+    }
+
+    /** 访问明细（仅超级管理员）：最近 N 条 */
+    public List<com.qxfly.imagehost.entity.ShareViewEntity> views(Long userId, Long id) {
+        requireOwned(userId, id);
+        return shareViewMapper.selectList(Wrappers.<com.qxfly.imagehost.entity.ShareViewEntity>lambdaQuery()
+                .eq(com.qxfly.imagehost.entity.ShareViewEntity::getShareId, id)
+                .orderByDesc(com.qxfly.imagehost.entity.ShareViewEntity::getId)
+                .last("LIMIT 200"));
+    }
+
+    /** 校验 token 与密码，返回分享实体；不合法直接抛业务异常 */
+    private ShareLinkEntity resolve(String token, String password) {
         ShareLinkEntity entity = shareLinkMapper.selectOne(Wrappers.<ShareLinkEntity>lambdaQuery()
                 .eq(ShareLinkEntity::getToken, token)
                 .last("LIMIT 1"));
@@ -127,13 +187,61 @@ public class ShareService {
                 throw BizException.forbidden("访问密码不正确");
             }
         }
-        long views = (entity.getViewCount() == null ? 0L : entity.getViewCount()) + 1;
-        shareLinkMapper.update(null, Wrappers.<ShareLinkEntity>lambdaUpdate()
-                .eq(ShareLinkEntity::getId, entity.getId())
-                .set(ShareLinkEntity::getViewCount, views));
-        // 返回自增后的值，否则前端看到的还是上一次的访问数
-        entity.setViewCount(views);
-        return toVO(entity, true);
+        return entity;
+    }
+
+    /** 记录一次访问（每条分享最多留 200 条，避免被刷爆） */
+    private void recordView(Long shareId) {
+        try {
+            var row = new com.qxfly.imagehost.entity.ShareViewEntity();
+            row.setShareId(shareId);
+            row.setIp(clientIp());
+            row.setUserAgent(userAgent());
+            shareViewMapper.insert(row);
+            Long total = shareViewMapper.selectCount(Wrappers.<com.qxfly.imagehost.entity.ShareViewEntity>lambdaQuery()
+                    .eq(com.qxfly.imagehost.entity.ShareViewEntity::getShareId, shareId));
+            if (total != null && total > MAX_VIEWS_PER_SHARE) {
+                List<com.qxfly.imagehost.entity.ShareViewEntity> oldest = shareViewMapper.selectList(
+                        Wrappers.<com.qxfly.imagehost.entity.ShareViewEntity>lambdaQuery()
+                                .eq(com.qxfly.imagehost.entity.ShareViewEntity::getShareId, shareId)
+                                .orderByAsc(com.qxfly.imagehost.entity.ShareViewEntity::getId)
+                                .last("LIMIT " + (total - MAX_VIEWS_PER_SHARE)));
+                if (!oldest.isEmpty()) {
+                    shareViewMapper.deleteBatchIds(oldest.stream()
+                            .map(com.qxfly.imagehost.entity.ShareViewEntity::getId).toList());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("记录分享访问明细失败: {}", e.getMessage());
+        }
+    }
+
+    private String clientIp() {
+        try {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                    instanceof org.springframework.web.context.request.ServletRequestAttributes attributes) {
+                var request = attributes.getRequest();
+                String forwarded = request.getHeader("X-Forwarded-For");
+                String ip = StringUtils.hasText(forwarded) ? forwarded.split(",")[0].trim() : request.getRemoteAddr();
+                return ip != null && ip.length() > 64 ? ip.substring(0, 64) : ip;
+            }
+        } catch (Exception ignored) {
+            // 后台线程没有请求上下文
+        }
+        return null;
+    }
+
+    private String userAgent() {
+        try {
+            if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                    instanceof org.springframework.web.context.request.ServletRequestAttributes attributes) {
+                String agent = attributes.getRequest().getHeader("User-Agent");
+                return agent != null && agent.length() > 255 ? agent.substring(0, 255) : agent;
+            }
+        } catch (Exception ignored) {
+            // 忽略
+        }
+        return null;
     }
 
     private ShareLinkEntity requireOwned(Long userId, Long id) {

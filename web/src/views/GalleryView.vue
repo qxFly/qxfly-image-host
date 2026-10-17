@@ -106,6 +106,52 @@
                 :value="item.id" />
             </el-select>
             <el-button type="primary" @click="load(1)">查询</el-button>
+            <el-popover v-model:visible="filterVisible" placement="bottom-start" width="360" trigger="click">
+              <template #reference>
+                <el-button>
+                  <el-icon><Filter /></el-icon>&nbsp;筛选
+                  <el-badge v-if="activeFilterCount > 0" :value="activeFilterCount" style="margin-left: 6px" />
+                </el-button>
+              </template>
+              <div class="filter-form">
+                <div class="filter-form__group">
+                  <span class="filter-form__label">体积（MB）</span>
+                  <div class="filter-form__range">
+                    <el-input-number v-model="query.minSizeMB" :min="0" :step="1" placeholder="不限" size="small" controls-position="right" />
+                    <span class="filter-form__dash">-</span>
+                    <el-input-number v-model="query.maxSizeMB" :min="0" :step="1" placeholder="不限" size="small" controls-position="right" />
+                  </div>
+                </div>
+                <div class="filter-form__group">
+                  <span class="filter-form__label">上传日期</span>
+                  <div class="filter-form__range">
+                    <el-date-picker v-model="query.dateFrom" type="date" value-format="YYYY-MM-DD" placeholder="不限" size="small" style="width: 132px" />
+                    <span class="filter-form__dash">-</span>
+                    <el-date-picker v-model="query.dateTo" type="date" value-format="YYYY-MM-DD" placeholder="不限" size="small" style="width: 132px" />
+                  </div>
+                </div>
+                <div class="filter-form__group">
+                  <span class="filter-form__label">宽（像素）</span>
+                  <div class="filter-form__range">
+                    <el-input-number v-model="query.minWidth" :min="0" :step="50" placeholder="不限" size="small" controls-position="right" />
+                    <span class="filter-form__dash">-</span>
+                    <el-input-number v-model="query.maxWidth" :min="0" :step="50" placeholder="不限" size="small" controls-position="right" />
+                  </div>
+                </div>
+                <div class="filter-form__group">
+                  <span class="filter-form__label">高（像素）</span>
+                  <div class="filter-form__range">
+                    <el-input-number v-model="query.minHeight" :min="0" :step="50" placeholder="不限" size="small" controls-position="right" />
+                    <span class="filter-form__dash">-</span>
+                    <el-input-number v-model="query.maxHeight" :min="0" :step="50" placeholder="不限" size="small" controls-position="right" />
+                  </div>
+                </div>
+                <div class="filter-form__actions">
+                  <el-button size="small" @click="resetFilters">重置</el-button>
+                  <el-button size="small" type="primary" @click="applyFilters">应用筛选</el-button>
+                </div>
+              </div>
+            </el-popover>
             <div class="toolbar-spacer"></div>
             <el-button @click="load()"
               ><el-icon><Refresh /></el-icon>&nbsp;刷新</el-button
@@ -198,9 +244,15 @@
           </el-button>
         </div>
 
-        <el-empty
-          v-if="!loading && images.length === 0"
-          :description="emptyHint" />
+        <ListSkeleton v-if="loading && images.length === 0" :rows="5" />
+
+        <EmptyState
+          v-else-if="images.length === 0"
+          icon="Picture"
+          :title="emptyHint"
+          description="换个目录或关键词试试；也可以到「上传」把图片加进来"
+          :action-text="canManage ? '去上传' : ''"
+          @action="router.push('/upload')" />
 
         <div v-else v-loading="loading" class="image-grid">
           <ImageCard
@@ -338,8 +390,11 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import EmptyState from "@/components/EmptyState.vue";
 import ImageCard from "@/components/ImageCard.vue";
+import ListSkeleton from "@/components/ListSkeleton.vue";
 import ImportDialog from "@/components/ImportDialog.vue";
 import LinkPickerDialog from "@/components/LinkPickerDialog.vue";
 import MigrateDialog from "@/components/MigrateDialog.vue";
@@ -430,6 +485,8 @@ const sizeOption = ref<number>(
 );
 const customSize = ref<number>(initialSize);
 
+const router = useRouter()
+
 const query = reactive<{
   page: number;
   size: number;
@@ -437,6 +494,17 @@ const query = reactive<{
   storageConfigId?: number;
   directory?: string;
   matchMode: string;
+  /** 体积区间（MB，空表示不限） */
+  minSizeMB?: number;
+  maxSizeMB?: number;
+  /** 上传日期区间（yyyy-MM-dd） */
+  dateFrom?: string;
+  dateTo?: string;
+  /** 尺寸区间（像素） */
+  minWidth?: number;
+  maxWidth?: number;
+  minHeight?: number;
+  maxHeight?: number;
 }>({
   page: 1,
   size: initialSize,
@@ -444,7 +512,48 @@ const query = reactive<{
   storageConfigId: undefined,
   directory: undefined,
   matchMode: "fuzzy",
+  minSizeMB: undefined,
+  maxSizeMB: undefined,
+  dateFrom: undefined,
+  dateTo: undefined,
+  minWidth: undefined,
+  maxWidth: undefined,
+  minHeight: undefined,
+  maxHeight: undefined,
 });
+
+/** 当前生效的筛选维度数量 */
+const activeFilterCount = computed(() => {
+  let count = 0;
+  if (query.minSizeMB) count++;
+  if (query.maxSizeMB) count++;
+  if (query.dateFrom) count++;
+  if (query.dateTo) count++;
+  if (query.minWidth) count++;
+  if (query.maxWidth) count++;
+  if (query.minHeight) count++;
+  if (query.maxHeight) count++;
+  return count;
+});
+
+const filterVisible = ref(false);
+
+function applyFilters() {
+  filterVisible.value = false;
+  load(1);
+}
+
+function resetFilters() {
+  query.minSizeMB = undefined;
+  query.maxSizeMB = undefined;
+  query.dateFrom = undefined;
+  query.dateTo = undefined;
+  query.minWidth = undefined;
+  query.maxWidth = undefined;
+  query.minHeight = undefined;
+  query.maxHeight = undefined;
+  load(1);
+}
 
 const searchPlaceholder = computed(() => {
   if (query.matchMode === "exact") {
@@ -673,6 +782,16 @@ async function load(page?: number, retried = false) {
     if (query.directory) {
       params.directory = query.directory;
     }
+    // 筛选维度：只在填了值时才传，后端按「有条件才过滤」处理
+    const filterParams: Record<string, unknown> = params;
+    if (query.minSizeMB) filterParams.minSize = Math.round(query.minSizeMB * 1024 * 1024);
+    if (query.maxSizeMB) filterParams.maxSize = Math.round(query.maxSizeMB * 1024 * 1024);
+    if (query.dateFrom) filterParams.dateFrom = query.dateFrom;
+    if (query.dateTo) filterParams.dateTo = query.dateTo;
+    if (query.minWidth) filterParams.minWidth = query.minWidth;
+    if (query.maxWidth) filterParams.maxWidth = query.maxWidth;
+    if (query.minHeight) filterParams.minHeight = query.minHeight;
+    if (query.maxHeight) filterParams.maxHeight = query.maxHeight;
     const result = await fetchImages(params);
     images.value = result.data.records;
     total.value = result.data.total;
@@ -1002,7 +1121,7 @@ onBeforeUnmount(() => {
   background: #fff;
   border: 1px solid #eef0f4;
   border-radius: 999px;
-  box-shadow: 0 12px 32px rgba(31, 42, 68, 0.18);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
 }
 
 .selection-float__count {
@@ -1014,4 +1133,42 @@ onBeforeUnmount(() => {
   margin: 0 2px;
   color: var(--el-color-primary);
 }
+
+/* 图库筛选面板（F4） */
+.filter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-form__group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.filter-form__label {
+  flex: 0 0 72px;
+  font-size: 12px;
+  color: var(--jf-text-2, #5a6b80);
+}
+
+.filter-form__range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.filter-form__dash {
+  color: var(--jf-text-3, #8b95a4);
+}
+
+.filter-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
 </style>

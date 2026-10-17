@@ -27,10 +27,32 @@ export interface DuplicateResult {
   groups: DuplicateGroup[]
 }
 
-/** 重复图片分组（仅超级管理员） */
-export const fetchDuplicates = (page: number, size: number) =>
-  get<DuplicateResult>('/images/duplicates', { page, size })
+/** 保留策略：最早 / 最新 / 最大（内容一样，差别是留哪条记录） */
+export type KeepStrategy = 'earliest' | 'latest' | 'largest'
 
-/** 清理：每组保留最早的一张，其余移入回收站；传 hash 只清理这一组 */
-export const cleanupDuplicates = (hash?: string) =>
-  del<number>('/images/duplicates' + (hash ? '?hash=' + encodeURIComponent(hash) : ''))
+/** 重复图片分组（仅超级管理员）；可按存储后端 / 目录筛选 */
+export const fetchDuplicates = (
+  page: number,
+  size: number,
+  storageConfigId?: number,
+  directory?: string,
+) =>
+  get<DuplicateResult>('/images/duplicates', {
+    page,
+    size,
+    ...(storageConfigId ? { storageConfigId } : {}),
+    ...(directory ? { directory } : {}),
+  })
+
+/** 清理：每组按保留策略留一张，其余移入回收站；传 hash 只清理这一组 */
+export const cleanupDuplicates = (
+  keep: KeepStrategy = 'earliest',
+  hash?: string,
+  storageConfigId?: number,
+) => {
+  const params = new URLSearchParams()
+  params.set('keep', keep)
+  if (hash) params.set('hash', hash)
+  if (storageConfigId) params.set('storageConfigId', String(storageConfigId))
+  return del<number>('/images/duplicates?' + params.toString())
+}

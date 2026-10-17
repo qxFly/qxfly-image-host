@@ -34,6 +34,11 @@ public class DuplicateService {
 
     /** 一次最多返回多少组 */
     private static final int MAX_GROUPS = 200;
+
+    /** 保留策略：最早上传 / 最新上传 / 最大文件（内容都一样，差别在于留哪条记录） */
+    public static final String KEEP_EARLIEST = "earliest";
+    public static final String KEEP_LATEST = "latest";
+    public static final String KEEP_LARGEST = "largest";
     /** 一组最多展示多少张（其余的只计数） */
     private static final int MAX_IMAGES_PER_GROUP = 100;
 
@@ -42,9 +47,9 @@ public class DuplicateService {
     private final UserService userService;
 
     /** 按内容哈希分组，返回每一组（含组内图片明细） */
-    public Map<String, Object> groups(AuthUser user, long page, long size) {
+    public Map<String, Object> groups(AuthUser user, long page, long size, Long storageConfigId, String directory) {
         List<Long> ownerIds = userService.visibleOwnerIds(user);
-        List<Map<String, Object>> grouped = imageMapper.selectMaps(new QueryWrapper<ImageEntity>()
+        QueryWrapper<ImageEntity> wrapper = new QueryWrapper<ImageEntity>()
                 .select("hash", "count(*) as cnt", "sum(size) as total_size", "min(id) as keep_id")
                 .in("user_id", ownerIds)
                 .eq("deleted", 0)
@@ -52,7 +57,17 @@ public class DuplicateService {
                 .ne("hash", "")
                 .groupBy("hash")
                 .having("count(*) > 1")
-                .orderByAsc("keep_id"));
+                .orderByAsc("keep_id");
+        // 按存储后端 / 目录筛选（与图库同一套语义：目录按前缀匹配，选中父目录含子目录）
+        wrapper.eq(storageConfigId != null, "storage_config_id", storageConfigId);
+        if (org.springframework.util.StringUtils.hasText(directory)) {
+            String prefix = directory.trim().replace("\\", "/");
+            if (!prefix.endsWith("/")) {
+                prefix = prefix + "/";
+            }
+            wrapper.likeRight("object_key", prefix);
+        }
+        List<Map<String, Object>> grouped = imageMapper.selectMaps(wrapper);
 
         long total = grouped.size();
         int from = (int) Math.min((long) (Math.max(1, page) - 1) * size, grouped.size());
@@ -71,6 +86,7 @@ public class DuplicateService {
                     .in("user_id", ownerIds)
                     .eq("deleted", 0)
                     .eq("hash", hash)
+                    .eq(storageConfigId != null, "storage_config_id", storageConfigId)
                     .orderByAsc("id")
                     .last("LIMIT " + MAX_IMAGES_PER_GROUP));
             for (ImageEntity entity : rows) {
@@ -99,18 +115,22 @@ public class DuplicateService {
     /**
      * 清理：每组只保留一张，其余移入回收站（不直接物理删除，误判还能捞回来）。
      *
-     * @param hash 只清理这一组；为空表示清理全部组
+     * @param hash     只清理这一组；为空表示清理全部组
+     * @param keep     保留策略：earliest / latest / largest
+     * @param storageConfigId 只清理某个存储后端下的（与列表筛选一致）
      * @return 移入回收站的张数
      */
     @Transactional
-    public int cleanup(AuthUser user, String hash) {
+    public int cleanup(AuthUser user, String hash, String keep, Long storageConfigId) {
         List<Long> ownerIds = userService.visibleOwnerIds(user);
+        String strategy = org.springframework.util.StringUtils.hasText(keep) ? keep.trim() : KEEP_EARLIEST;
         QueryWrapper<ImageEntity> wrapper = new QueryWrapper<ImageEntity>()
-                .select("hash", "count(*) as cnt", "min(id) as keep_id")
+                .select("hash")
                 .in("user_id", ownerIds)
                 .eq("deleted", 0)
                 .isNotNull("hash")
                 .ne("hash", "")
+                .eq(storageConfigId != null, "storage_config_id", storageConfigId)
                 .groupBy("hash")
                 .having("count(*) > 1");
         if (hash != null && !hash.isBlank()) {
@@ -121,14 +141,21 @@ public class DuplicateService {
         int moved = 0;
         for (Map<String, Object> row : grouped) {
             String groupHash = String.valueOf(row.get("hash"));
-            long keepId = number(row.get("keep_id"));
-            List<ImageEntity> rows = imageMapper.selectList(new QueryWrapper<ImageEntity>()
+            List<ImageEntity> members = imageMapper.selectList(new QueryWrapper<ImageEntity>()
                     .in("user_id", ownerIds)
                     .eq("deleted", 0)
                     .eq("hash", groupHash)
-                    .ne("id", keepId)
+                    .eq(storageConfigId != null, "storage_config_id", storageConfigId)
                     .orderByAsc("id"));
-            rows.sort(Comparator.comparing(ImageEntity::getId));
+            // 保留哪一张取决于策略：内容都一样，差别只是留哪条记录
+            ImageEntity keeper = pickKeeper(members, strategy);
+            if (keeper == null) {
+                continue;
+            }
+            List<ImageEntity> rows = members.stream()
+                    .filter(entity -> !entity.getId().equals(keeper.getId()))
+                    .sorted(Comparator.comparing(ImageEntity::getId))
+                    .toList();
             for (ImageEntity entity : rows) {
                 try {
                     imageService.moveToTrash(entity.getUserId(), entity.getId());
@@ -140,6 +167,20 @@ public class DuplicateService {
         }
         log.info("重复图片清理：移入回收站 {} 张（每组保留最早的一张）", moved);
         return moved;
+    }
+
+    /** 按策略选出保留的那一张 */
+    private ImageEntity pickKeeper(List<ImageEntity> members, String strategy) {
+        if (members.isEmpty()) {
+            return null;
+        }
+        return switch (strategy) {
+            case KEEP_LATEST -> members.get(members.size() - 1);
+            case KEEP_LARGEST -> members.stream()
+                    .max(Comparator.comparing(entity -> entity.getSize() == null ? 0L : entity.getSize()))
+                    .orElse(members.get(0));
+            default -> members.get(0);
+        };
     }
 
     private long number(Object value) {

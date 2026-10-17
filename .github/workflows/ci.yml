@@ -40,6 +40,19 @@ jobs:
           path: server/target/surefire-reports/
           if-no-files-found: ignore
 
+  scripts:
+    name: 脚本自检（.cmd 纯 ASCII / .ps1 有 BOM）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 两条编码红线：.cmd 只能是 ASCII；.ps1 必须带 UTF-8 BOM
+      # （历史上分别导致过 cmd 把中文拆坏执行出垃圾命令、PowerShell 按 ANSI 读中文吞掉代码）
+      - name: 校验脚本编码
+        run: |
+          chmod +x toolbox.sh
+          ./toolbox.sh check
+
   web:
     name: 前端（类型检查 + 构建）
     runs-on: ubuntu-latest

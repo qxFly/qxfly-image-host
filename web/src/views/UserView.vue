@@ -1,6 +1,6 @@
 <template>
   <div class="page" v-loading="loading">
-    <h2 class="page-title">用户管理</h2>
+    <PageHeader title="用户管理" subtitle="账号、角色与启用状态；登录失败锁定次数与账号无关" />
 
     <el-card shadow="never">
       <template #header>
@@ -31,7 +31,44 @@
         </div>
       </template>
 
-      <el-table :data="users" style="width: 100%">
+      <!-- 手机端用卡片列表（U4） -->
+      <TableCardList
+        v-if="isMobile"
+        :rows="users"
+        :fields="cardFields"
+        :loading="loading"
+        empty-text="没有匹配的账号"
+        empty-description="换个关键字试试，或新建一个账号"
+        empty-icon="UserFilled"
+      >
+        <template #field-username="{ row }">{{ row.username }}</template>
+        <template #field-nickname="{ row }">{{ row.nickname || '—' }}</template>
+        <template #field-email="{ row }">{{ row.email || '—' }}</template>
+        <template #field-role="{ row }">
+          <el-tag :type="isSuperAdminRow(row) ? 'warning' : 'info'" effect="plain" size="small">
+            {{ row.roleLabel || (isSuperAdminRow(row) ? '超级管理员' : '普通用户') }}
+          </el-tag>
+        </template>
+        <template #field-status="{ row }">
+          <el-switch
+            :model-value="row.status === 1"
+            :disabled="isProtected(row)"
+            @change="(value: string | number | boolean) => toggleStatus(row, value === true)" />
+          <span class="text-muted" style="margin-left: 8px">{{ row.status === 1 ? '启用' : '禁用' }}</span>
+        </template>
+        <template #field-createdAt="{ row }">{{ formatDate(row.createdAt) }}</template>
+        <template #actions="{ row }">
+          <el-button link type="primary" size="small" :disabled="isSuperAdminRow(row)" @click="openEdit(row)">编辑</el-button>
+          <el-button link type="primary" size="small" :disabled="isSuperAdminRow(row)" @click="openReset(row)">重置密码</el-button>
+          <el-popconfirm title="确认删除该账号？" width="210" @confirm="remove(row)">
+            <template #reference>
+              <el-button link type="danger" size="small" :disabled="isProtected(row)">删除</el-button>
+            </template>
+          </el-popconfirm>
+        </template>
+      </TableCardList>
+
+      <el-table v-else :data="users" style="width: 100%">
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="username" label="用户名" min-width="140" show-overflow-tooltip />
         <el-table-column prop="nickname" label="昵称" min-width="140" show-overflow-tooltip />
@@ -72,7 +109,12 @@
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty description="没有匹配的账号" :image-size="70" />
+          <EmptyState
+            icon="UserFilled"
+            title="没有匹配的账号"
+            description="换个关键字试试，或新建一个账号"
+            action-text="新建用户"
+            @action="openCreate" />
         </template>
       </el-table>
 
@@ -161,6 +203,9 @@
 </template>
 
 <script setup lang="ts">
+import EmptyState from '@/components/EmptyState.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import TableCardList from '@/components/TableCardList.vue'
 import { useIsMobile } from '@/utils/responsive'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
@@ -178,6 +223,17 @@ import type { UserVO } from '@/types'
 
 const auth = useAuthStore()
 const isMobile = useIsMobile()
+
+/** 手机端卡片模式字段（与表格列同源） */
+const cardFields = [
+  { label: 'ID', prop: 'id' },
+  { label: '用户名', prop: 'username' },
+  { label: '昵称', prop: 'nickname' },
+  { label: '邮箱', prop: 'email' },
+  { label: '角色', prop: 'role' },
+  { label: '状态', prop: 'status' },
+  { label: '创建时间', prop: 'createdAt' },
+]
 const loading = ref(false)
 const submitting = ref(false)
 const users = ref<UserVO[]>([])

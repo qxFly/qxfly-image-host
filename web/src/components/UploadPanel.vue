@@ -81,7 +81,7 @@ function statusText(task: UploadTask) {
   background: #fff;
   border: 1px solid #eef0f4;
   border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(31, 42, 68, 0.18);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
   font-size: 12px;
 }
 

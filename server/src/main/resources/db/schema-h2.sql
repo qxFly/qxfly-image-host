@@ -18,6 +18,26 @@ CREATE TABLE IF NOT EXISTS sys_user
     CONSTRAINT uk_sys_user_username UNIQUE (username)
 );
 
+CREATE TABLE IF NOT EXISTS migration_failure
+(
+    id           BIGINT AUTO_INCREMENT NOT NULL,
+    image_id     BIGINT       NOT NULL,
+    to_config_id BIGINT       NOT NULL,
+    reason       VARCHAR(255) DEFAULT NULL,
+    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS share_view
+(
+    id         BIGINT AUTO_INCREMENT NOT NULL,
+    share_id   BIGINT       NOT NULL,
+    ip         VARCHAR(64)  DEFAULT NULL,
+    user_agent VARCHAR(255) DEFAULT NULL,
+    created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+
 CREATE TABLE IF NOT EXISTS share_link
 (
     id            BIGINT AUTO_INCREMENT NOT NULL,

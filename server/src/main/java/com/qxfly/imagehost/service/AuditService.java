@@ -52,6 +52,8 @@ public class AuditService {
         public static final String SETTINGS_UPDATE = "SETTINGS_UPDATE";
         public static final String SHARE_CREATE = "SHARE_CREATE";
         public static final String SHARE_DELETE = "SHARE_DELETE";
+        /** 存储后端体检（只记失败，避免每天刷屏） */
+        public static final String STORAGE_CHECK = "STORAGE_CHECK";
 
         private Actions() {
         }
@@ -60,6 +62,93 @@ public class AuditService {
     private static final long MAX_PAGE_SIZE = 200;
 
     private final AuditLogMapper auditLogMapper;
+    private final com.qxfly.imagehost.config.AppProperties appProperties;
+
+    /** 每日清理的守护线程；容器关闭时进程退出，不阻塞 JVM */
+    private java.util.concurrent.ScheduledExecutorService cleanupExecutor;
+
+    @org.springframework.context.event.EventListener(
+            org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void startRetentionTask() {
+        int days = appProperties.getAudit().getRetentionDays();
+        if (days <= 0) {
+            log.info("审计日志保留策略：永久保留（audit.retention-days={}）", days);
+            return;
+        }
+        cleanupExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "audit-retention");
+            thread.setDaemon(true);
+            return thread;
+        });
+        cleanupExecutor.scheduleWithFixedDelay(this::cleanupExpired, 1, 24 * 60, java.util.concurrent.TimeUnit.MINUTES);
+        log.info("审计日志保留策略：保留 {} 天，每 24 小时清理一次", days);
+    }
+
+    /** 清理超过保留期的日志，返回删除行数 */
+    public int cleanupExpired() {
+        int days = appProperties.getAudit().getRetentionDays();
+        if (days <= 0) {
+            return 0;
+        }
+        java.time.LocalDateTime deadline = java.time.LocalDateTime.now().minusDays(days);
+        try {
+            int deleted = auditLogMapper.delete(Wrappers.<AuditLogEntity>lambdaQuery()
+                    .lt(AuditLogEntity::getCreatedAt, deadline));
+            if (deleted > 0) {
+                log.info("审计日志清理：删除 {} 条（早于 {}）", deleted, deadline.toLocalDate());
+            }
+            return deleted;
+        } catch (Exception e) {
+            log.warn("审计日志清理失败: {}", e.getMessage());
+            return 0;
+        }
+    }
+
+    /** 导出 CSV（只导出筛选命中的前 N 行，避免一次拉爆内存） */
+    public byte[] exportCsv(String keyword, String action, Boolean success) {
+        int limit = Math.max(1, appProperties.getAudit().getExportMaxRows());
+        var wrapper = Wrappers.<AuditLogEntity>lambdaQuery()
+                .eq(StringUtils.hasText(action), AuditLogEntity::getAction, action)
+                .eq(success != null, AuditLogEntity::getSuccess, Boolean.TRUE.equals(success) ? 1 : 0)
+                .orderByDesc(AuditLogEntity::getId)
+                .last("LIMIT " + limit);
+        if (StringUtils.hasText(keyword)) {
+            String value = keyword.trim();
+            wrapper.and(w -> w.like(AuditLogEntity::getUsername, value)
+                    .or().like(AuditLogEntity::getAction, value)
+                    .or().like(AuditLogEntity::getDetail, value)
+                    .or().like(AuditLogEntity::getTargetId, value)
+                    .or().like(AuditLogEntity::getIp, value));
+        }
+        StringBuilder csv = new StringBuilder();
+        csv.append('\ufeff');   // BOM：Excel 打开中文不乱码
+        csv.append("id,时间,操作者,动作,结果,对象类型,对象ID,详情,来源IP,User-Agent\n");
+        for (AuditLogEntity row : auditLogMapper.selectList(wrapper)) {
+            csv.append(row.getId()).append(',')
+                    .append(cell(row.getCreatedAt() == null ? null : row.getCreatedAt().toString())).append(',')
+                    .append(cell(row.getUsername())).append(',')
+                    .append(cell(row.getAction())).append(',')
+                    .append(row.getSuccess() != null && row.getSuccess() == 1 ? "成功" : "失败").append(',')
+                    .append(cell(row.getTargetType())).append(',')
+                    .append(cell(row.getTargetId())).append(',')
+                    .append(cell(row.getDetail())).append(',')
+                    .append(cell(row.getIp())).append(',')
+                    .append(cell(row.getUserAgent())).append('\n');
+        }
+        return csv.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** CSV 单元格转义 */
+    private static String cell(String value) {
+        if (value == null) {
+            return "";
+        }
+        String text = value.replace("\r", " ").replace("\n", " ");
+        if (text.contains(",") || text.contains("\"")) {
+            text = "\"" + text.replace("\"", "\"\"") + "\"";
+        }
+        return text;
+    }
 
     /** 记录当前登录用户的操作 */
     public void log(String action, String targetType, Object targetId, String detail) {

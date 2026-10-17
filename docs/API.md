@@ -1,6 +1,6 @@
 # qxfly-image-host API 文档
 
-Base URL：`http://127.0.0.1:8080`（端口可改：`config/local.env` 里的 `BACKEND_PORT`，或 `start.ps1 -BackendPort 8081`）
+Base URL：`http://127.0.0.1:8080`（端口可改：`config/local.env` 里的 `BACKEND_PORT`，或 `start.cmd -BackendPort 8081`）
 所有业务接口都以 `/api` 开头。
 
 ## 通用约定
@@ -676,6 +676,20 @@ curl -o out.png http://127.0.0.1:8080/files/24/images/2026/10/13/001/f30a8554109
 
 用于把仓库/桶里**已经存在**、但平台还没登记的图片批量导入图库。
 
+### GET /api/images —— 图库列表（分页 + 筛选）
+
+| 参数 | 说明 |
+| --- | --- |
+| `page` / `size` | 分页（size 上限 500） |
+| `keyword` + `matchMode` | 关键字；`fuzzy`（默认）/ `exact` / `prefix` |
+| `storageConfigId` | 只看某个存储后端 |
+| `directory` | 目录前缀；`__root__` 表示只看根目录下的文件 |
+| `minSize` / `maxSize` | 体积区间（字节） |
+| `dateFrom` / `dateTo` | 上传日期区间（`yyyy-MM-dd`，含当天，dateTo 取该日 23:59） |
+| `minWidth` / `maxWidth` / `minHeight` / `maxHeight` | 尺寸区间（像素；无尺寸记录的旧图不会被命中） |
+
+所有筛选参数都是**可选**的，未填不参与过滤；多个维度之间是 AND 关系。
+
 ### GET /api/images/import/preview
 
 | 参数 | 必填 | 说明 |
@@ -1077,6 +1091,77 @@ STORAGE_DELETE / STORAGE_DEFAULT / SETTINGS_UPDATE / SHARE_CREATE / SHARE_DELETE
 读操作不记录；写入失败只打日志，不影响业务。
 
 ## 系统
+
+### GET /api/system/alerts —— 概览"待处理"提示
+
+登录即可访问。有需要处理的事项才返回条目，否则返回空数组。前端据决定是否展示"待处理"区块。
+
+```json
+[
+  { "level": "info", "title": "回收站里有 12 张图片", "detail": "确认不需要了就彻底删除，误删的可以恢复", "path": "/trash" },
+  { "level": "danger", "title": "存储后端「GitHub图床」体检失败", "detail": "上传到 GitHub 仓库失败 (HTTP 401)", "path": "/storage" },
+  { "level": "warning", "title": "分享「国庆照片」即将过期", "detail": "过期时间：2026-10-18 20:09", "path": "/shares" }
+]
+```
+
+- `level`：`info` / `warning` / `danger`（只决定左侧圆点颜色）
+- `path`：前端路由，前端直接 `router.push`
+- 数据来源：图片统计（回收站/重复组）、存储体检结果、分享表（不足 72 小时视为将过期）
+
+### GET /api/shares/{token}/download —— 相册打包下载（公开）
+
+把相册里的所有图片打包成 zip 流式返回。**不需要登录**；密码相册把密码放在 query 里：
+
+```bash
+curl -o album.zip -G --data-urlencode "password=xxxx" \
+  http://127.0.0.1:8080/api/shares/{token}/download
+```
+
+- 响应头 `Content-Type: application/zip` 与 `X-Image-Count`（包内图片数）
+- **边取边写**：内存里最多只放一张图；单张失败只写进包内「下载失败清单.txt」
+- 密码错误 / 相册被撤销 / 已过期：返回 HTTP 200 + `body.code = 403`（本项目业务错误的统一约定）
+
+### GET /api/shares/{id}/views —— 访问明细（仅超级管理员）
+
+```json
+[ { "id": 12, "shareId": 3, "ip": "127.0.0.1", "userAgent": "Mozilla/5.0 ...", "createdAt": "2026-10-15T14:30:37" } ]
+```
+
+每条分享最多保留最近 **200** 条明细（超出自动淘汰最旧的）。
+
+### GET /api/images/duplicates —— 重复图片分组（仅超管）
+
+| 参数 | 说明 |
+| --- | --- |
+| `page` / `size` | 分页 |
+| `storageConfigId` | 只看某个存储后端 |
+| `directory` | 目录前缀（按前缀匹配，选中父目录含子目录） |
+
+返回 `groups`（每组的 hash / 张数 / 总大小 / 图片清单，`keep` 标出建议保留的那张）、`wastedSize`（可回收空间）。
+
+### DELETE /api/images/duplicates —— 清理重复（仅超管）
+
+| 参数 | 说明 |
+| --- | --- |
+| `hash` | 只清理这一组；不传则清理全部组 |
+| `keep` | 保留策略：`earliest`（默认）/ `latest` / `largest` |
+| `storageConfigId` | 只清理某个存储后端下的 |
+
+返回移入回收站的张数。清理**不物理删除**，误判可去回收站恢复。
+
+### GET /api/images/migrate/failures —— 迁移失败项（仅超管）
+
+```json
+[ { "imageId": 20240, "originalName": "E2E-FAIL.png", "toConfigId": 2, "reason": "存储配置不存在", "createdAt": "..." } ]
+```
+
+失败项落库保存（```migration_failure```），**重启不丢**；图片被删除后不再显示。
+
+### POST /api/images/migrate/retry —— 一键重试失败项（仅超管）
+
+Body 可空；查询参数 `toConfigId` 可选（只重试迁往某个目标的）。
+把已持久化的失败记录**按原目标**重新提交成一个新的迁移任务，返回新任务（`MigrationTaskVO``````）；
+没有可重试项时返回 HTTP 200 + `body.code=400`。
 
 ### GET /api/system/info
 

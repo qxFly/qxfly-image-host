@@ -1,6 +1,6 @@
 <template>
   <div class="page" v-loading="loading">
-    <h2 class="page-title">回收站</h2>
+    <PageHeader title="回收站" subtitle="删除的图片会先放在这里，可以恢复或彻底删除" />
 
     <el-card shadow="never">
       <template #header>
@@ -44,13 +44,48 @@
 恢复会把文件搬回原位置；在这里再删一次才会真正删掉云端文件，且不可恢复。"
       />
 
-      <el-table v-loading="loading" :data="rows" style="width: 100%" @selection-change="onSelectionChange">
+      <!-- 手机端用卡片列表，避免表格只能横向滚动、操作列占满屏幕（U4） -->
+      <TableCardList
+        v-if="isMobile"
+        :rows="rows"
+        :fields="cardFields"
+        :loading="loading"
+        empty-text="回收站是空的"
+        empty-description="在图库里删除的图片会先放在这里，可以恢复或彻底删除"
+        empty-icon="DeleteFilled"
+      >
+        <template #field-originalName="{ row }">
+          <span>{{ row.originalName }}</span>
+        </template>
+        <template #field-size="{ row }">
+          {{ formatSize(row.size) }}
+        </template>
+        <template #field-trashKey="{ row }">
+          <div>
+            <el-tag v-if="row.trashKey" size="small" type="warning" effect="plain">已移入回收站目录</el-tag>
+            <el-tag v-else size="small" type="info" effect="plain">原地保留</el-tag>
+            <div class="trash-key mono" :title="row.trashKey || row.objectKey">
+              {{ row.trashKey || row.objectKey }}
+            </div>
+          </div>
+        </template>
+        <template #field-deletedAt="{ row }">
+          {{ formatDate(row.deletedAt) }}
+        </template>
+        <template #actions="{ row }">
+          <el-button link type="primary" size="small" :disabled="working" @click="doRestore([row])">恢复</el-button>
+          <el-button link type="danger" size="small" :disabled="working" @click="confirmPurge([row])">彻底删除</el-button>
+        </template>
+      </TableCardList>
+
+      <el-table v-else :data="rows" style="width: 100%" @selection-change="onSelectionChange">
         <el-table-column type="selection" width="46" />
         <el-table-column label="预览" width="86">
           <template #default="{ row }">
             <el-image
               class="trash-thumb"
               :src="row.thumbUrl || row.previewUrl || row.url"
+              :alt="row.originalName || '图片'"
               fit="cover"
               :preview-src-list="[row.previewUrl || row.url]"
               preview-teleported
@@ -87,7 +122,10 @@
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty description="回收站是空的" :image-size="80" />
+          <EmptyState
+            icon="DeleteFilled"
+            title="回收站是空的"
+            description="在图库里删除的图片会先放在这里，可以恢复或彻底删除" />
         </template>
       </el-table>
 
@@ -108,6 +146,9 @@
 
 <script setup lang="ts">
 import { useIsMobile } from '@/utils/responsive'
+import EmptyState from '@/components/EmptyState.vue'
+import PageHeader from '@/components/PageHeader.vue'
+import TableCardList from '@/components/TableCardList.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { clearTrash, fetchTrash, purgeImages, restoreImages } from '@/api/images'
@@ -120,6 +161,14 @@ interface TrashRow {
 }
 
 const isMobile = useIsMobile()
+
+/** 手机端卡片模式下的字段（与表格列同源） */
+const cardFields = [
+  { label: '文件名', prop: 'originalName' },
+  { label: '大小', prop: 'size' },
+  { label: '云端位置', prop: 'trashKey' },
+  { label: '移入时间', prop: 'deletedAt' },
+]
 const loading = ref(false)
 const working = ref(false)
 const rows = ref<TrashRow[]>([])

@@ -18,6 +18,13 @@ export const updateStorageConfig = (id: number, data: StorageConfigPayload) =>
 export const deleteStorageConfig = (id: number) => del<void>('/storage-configs/' + id)
 export const setDefaultStorageConfig = (id: number) => put<StorageConfigVO>('/storage-configs/' + id + '/default')
 export const testStorageConfig = (id: number) => post<{ message: string }>('/storage-configs/' + id + '/test')
+
+/** 立即体检：把启用的配置全部真测一遍（后端也会每 6 小时自动跑） */
+export const checkStorageConfigs = () =>
+  post<Record<string, { configId: number; name: string; ok: boolean; message: string; checkedAt: string }>>(
+    '/storage-configs/check',
+    {},
+  )
 export const testStorageConfigDraft = (data: StorageConfigPayload, existingId?: number) =>
   post<{ message: string }>(
     '/storage-configs/test' + (existingId ? '?existingId=' + existingId : ''),

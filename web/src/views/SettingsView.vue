@@ -60,6 +60,18 @@
             直接粘贴图片地址、浏览器隐私设置都会没有 Referer，建议放行
           </span>
         </el-form-item>
+        <el-divider content-position="left">缩略图缓存</el-divider>
+        <el-form-item v-if="thumbCache" label="占用">
+          <span class="mono">
+            {{ formatSize(thumbCache.bytes) }} / {{ formatSize(thumbCache.maxBytes) }}
+            · {{ thumbCache.files }} 个文件 · 保留 {{ thumbCache.days }} 天
+          </span>
+          <div class="toolbar-spacer"></div>
+          <el-button type="danger" plain :loading="clearingCache" @click="clearCache">清空缓存</el-button>
+        </el-form-item>
+        <el-form-item v-if="thumbCache" label="目录">
+          <span class="mono text-muted" style="word-break: break-all">{{ thumbCache.dir }}</span>
+        </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="saving" @click="save">保存</el-button>
           <el-button @click="load">重置</el-button>
@@ -95,13 +107,44 @@
         </el-descriptions-item>
       </el-descriptions>
     </el-card>
+
+    <el-card shadow="never">
+      <template #header>
+        <div class="toolbar" style="margin: 0">
+          <span>数据备份</span>
+          <div class="toolbar-spacer"></div>
+          <span class="text-muted">导出的是元数据清单，不含图片文件本身</span>
+        </div>
+      </template>
+      <el-form label-width="150px" style="max-width: 640px">
+        <el-form-item label="导出清单">
+          <el-button type="primary" plain @click="doExport('csv')">导出 CSV</el-button>
+          <el-button plain @click="doExport('json')">导出 JSON</el-button>
+          <div class="text-muted" style="margin-top: 6px">
+            CSV 带 BOM，可直接用 Excel 打开；包含对象键、访问地址、大小、sha256、宽高、存储类型与回收站状态。
+            图片本身仍在云端 / 磁盘上，清单只记录“它们在哪”。
+          </div>
+        </el-form-item>
+        <el-form-item label="从清单回灌">
+          <el-upload :show-file-list="false" :auto-upload="false" :on-change="onManifestFile" accept=".csv,.json">
+            <el-button :loading="restoring">选择 CSV / JSON 文件</el-button>
+          </el-upload>
+          <div class="text-muted" style="margin-top: 6px">
+            库里没有的记录会被补回来（按对象键去重、可重复执行），不会重新下载或上传任何文件。
+            典型场景：换数据库后把清单导回来，或者误删了记录。
+          </div>
+        </el-form-item>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { fetchSettings, updateSettings } from '@/api/settings'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { exportManifest, importManifest } from '@/api/images'
+import { clearThumbCache, fetchSettings, fetchThumbCache, updateSettings } from '@/api/settings'
+import { saveBlob } from '@/utils/download'
 import { fetchSystemInfo } from '@/api/system'
 import { formatSize } from '@/utils/format'
 import type { SettingsVO, SystemInfo } from '@/types'
@@ -114,6 +157,9 @@ const unlimited = ref(false)
 const limitMb = ref(30)
 const loginMaxAttempts = ref(5)
 const loginLockMinutes = ref(15)
+const thumbCache = ref<{ dir: string; files: number; bytes: number; maxBytes: number; days: number } | null>(null)
+const clearingCache = ref(false)
+const restoring = ref(false)
 const hotlinkEnabled = ref(false)
 const hotlinkDomains = ref('')
 const hotlinkAllowEmpty = ref(true)
@@ -141,6 +187,11 @@ async function load() {
     // 拦截器已经提示
   } finally {
     loading.value = false
+  }
+  try {
+    thumbCache.value = (await fetchThumbCache()).data
+  } catch {
+    // 普通情况只有超管会看到，取不到就隐藏
   }
   try {
     systemInfo.value = (await fetchSystemInfo()).data
@@ -181,6 +232,114 @@ async function save() {
   } finally {
     saving.value = false
   }
+}
+
+async function clearCache() {
+  await ElMessageBox.confirm('清空后图库缩略图会按需重新生成，原图与图库记录不受影响。继续？', '清空缩略图缓存', {
+    type: 'warning',
+  })
+  clearingCache.value = true
+  try {
+    const removed = (await clearThumbCache()).data
+    ElMessage.success('已清理 ' + removed + ' 个缓存文件')
+    thumbCache.value = (await fetchThumbCache()).data
+  } catch {
+    // 取消或失败
+  } finally {
+    clearingCache.value = false
+  }
+}
+
+/** 导出元数据清单 */
+async function doExport(format: 'csv' | 'json') {
+  const blob = await exportManifest(format)
+  saveBlob(blob, 'images-' + new Date().toISOString().slice(0, 10) + (format === 'json' ? '.json' : '.csv'))
+}
+
+/** 选择清单文件后回灌 */
+async function onManifestFile(file: { raw?: File }) {
+  const raw = file.raw
+  if (!raw) {
+    return
+  }
+  restoring.value = true
+  try {
+    const text = await raw.text()
+    const items = raw.name.toLowerCase().endsWith('.json') ? parseManifestJson(text) : parseManifestCsv(text)
+    if (items.length === 0) {
+      ElMessage.warning('没有解析到任何记录，请确认文件是本系统导出的 CSV / JSON')
+      return
+    }
+    await ElMessageBox.confirm(
+      '将回灌 ' + items.length + ' 条元数据记录（只补库里没有的，不碰云端文件）。继续？',
+      '从清单回灌',
+      { type: 'warning' },
+    )
+    const result = (await importManifest(items)).data
+    ElMessage.success('已插入 ' + result.inserted + ' 条、跳过 ' + result.skipped + ' 条')
+  } catch {
+    // 用户点取消与接口报错都由拦截器提示，这里不再重复弹错
+  } finally {
+    restoring.value = false
+  }
+}
+
+function parseManifestJson(text: string): Record<string, unknown>[] {
+  const parsed = JSON.parse(text) as unknown
+  if (Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>[]
+  }
+  if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { items?: unknown[] }).items)) {
+    return (parsed as { items: Record<string, unknown>[] }).items
+  }
+  return []
+}
+
+/** 解析本系统导出的 CSV（带 BOM，字段内可含逗号与引号） */
+function parseManifestCsv(text: string): Record<string, string>[] {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.trim().length > 0)
+  if (lines.length < 2) {
+    return []
+  }
+  const header = splitCsvLine(lines[0])
+  return lines.slice(1).map((line) => {
+    const cells = splitCsvLine(line)
+    const row: Record<string, string> = {}
+    header.forEach((key, index) => {
+      row[key] = cells[index] ?? ''
+    })
+    return row
+  })
+}
+
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+    if (inQuotes) {
+      if (char === '"') {
+        if (line[i + 1] === '"') {
+          current += '"'
+          i += 1
+        } else {
+          inQuotes = false
+        }
+      } else {
+        current += char
+      }
+    } else if (char === '"') {
+      inQuotes = true
+    } else if (char === ',') {
+      cells.push(current)
+      current = ''
+    } else {
+      current += char
+    }
+  }
+  cells.push(current)
+  return cells
 }
 
 onMounted(load)

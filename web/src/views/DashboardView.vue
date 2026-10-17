@@ -13,6 +13,32 @@
       </div>
     </div>
 
+    <!-- 待处理提示：有问题才出现，点击可直接跳转（U8） -->
+    <el-card v-if="alerts.length > 0" shadow="never" class="alert-card">
+      <template #header>
+        <div class="toolbar" style="margin: 0">
+          <span>待处理</span>
+          <el-tag size="small" effect="plain" type="warning">{{ alerts.length }} 项</el-tag>
+        </div>
+      </template>
+      <div class="alert-list">
+        <div
+          v-for="alert in alerts"
+          :key="alert.title"
+          class="alert-row"
+          :class="'is-' + alert.level"
+          @click="router.push(alert.path)"
+        >
+          <div class="alert-row__dot"></div>
+          <div class="alert-row__body">
+            <div class="alert-row__title">{{ alert.title }}</div>
+            <div class="alert-row__detail">{{ alert.detail }}</div>
+          </div>
+          <span class="alert-row__action">去处理 →</span>
+        </div>
+      </div>
+    </el-card>
+
     <div class="stat-grid">
       <div
         v-for="(card, index) in statCards"
@@ -132,6 +158,15 @@ import { deleteImage, fetchStats } from '@/api/images'
 import { useAuthStore } from '@/stores/auth'
 import { formatSize } from '@/utils/format'
 import { groupImagesByDay } from '@/utils/recentGroups'
+import { fetchAlerts } from '@/api/system'
+
+/** 概览「待处理」提示条目 */
+interface AlertItem {
+  level: 'info' | 'warning' | 'danger'
+  title: string
+  detail: string
+  path: string
+}
 import type { ImageVO, LinkMode, StatsVO } from '@/types'
 
 const router = useRouter()
@@ -188,6 +223,8 @@ const statCards = computed(() => [
 ])
 
 /** 内容管理（回收站 / 重复图片 / 分享链接）的入口卡片 */
+const alerts = ref<AlertItem[]>([])
+
 const contentCards = computed(() => [
   {
     key: 'trash',
@@ -249,6 +286,11 @@ async function remove(image: ImageVO) {
 }
 
 onMounted(async () => {
+  try {
+    alerts.value = (await fetchAlerts()).data
+  } catch {
+    // 提示接口失败不影响概览主体
+  }
   loading.value = true
   try {
     await refresh()
@@ -303,7 +345,7 @@ onMounted(async () => {
   background: #fff;
   border: 1px solid #eef1f6;
   border-radius: 16px;
-  box-shadow: 0 1px 2px rgba(31, 42, 68, 0.04);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   overflow: hidden;
   animation: stat-in 0.42s cubic-bezier(0.22, 0.9, 0.3, 1) both;
   animation-delay: var(--delay, 0ms);
@@ -316,14 +358,14 @@ onMounted(async () => {
   position: absolute;
   inset: 0 0 auto 0;
   height: 3px;
-  background: var(--tone-gradient);
+  background: none;
   opacity: 0.9;
 }
 
 .stat-card:hover {
   transform: translateY(-3px);
   border-color: #e4e9f2;
-  box-shadow: 0 14px 30px rgba(31, 42, 68, 0.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
 }
 
 .stat-card__icon {
@@ -335,7 +377,7 @@ onMounted(async () => {
   justify-content: center;
   border-radius: 13px;
   color: #fff;
-  background: var(--tone-gradient);
+  background: none;
   box-shadow: 0 6px 14px var(--tone-shadow);
 }
 
@@ -348,7 +390,7 @@ onMounted(async () => {
   font-weight: 650;
   line-height: 1.1;
   letter-spacing: -0.02em;
-  color: #1f2a44;
+  color: var(--jf-text);
   /* 数字等宽，切换时不会跳动 */
   font-variant-numeric: tabular-nums;
 }
@@ -360,23 +402,15 @@ onMounted(async () => {
 }
 
 .is-blue {
-  --tone-gradient: linear-gradient(135deg, #4f8bff, #2f6bff);
-  --tone-shadow: rgba(47, 107, 255, 0.32);
 }
 
 .is-violet {
-  --tone-gradient: linear-gradient(135deg, #9b7bff, #6f4bff);
-  --tone-shadow: rgba(111, 75, 255, 0.3);
 }
 
 .is-green {
-  --tone-gradient: linear-gradient(135deg, #3fd08a, #12b76a);
-  --tone-shadow: rgba(18, 183, 106, 0.3);
 }
 
 .is-amber {
-  --tone-gradient: linear-gradient(135deg, #ffc061, #f79009);
-  --tone-shadow: rgba(247, 144, 9, 0.3);
 }
 
 /* ================= 内容管理：三块可点的信息卡 ================= */
@@ -405,7 +439,7 @@ onMounted(async () => {
 .content-tile:hover {
   transform: translateY(-2px);
   border-color: #e2e8f4;
-  box-shadow: 0 10px 24px rgba(31, 42, 68, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
 .content-tile__icon {
@@ -417,7 +451,7 @@ onMounted(async () => {
   justify-content: center;
   border-radius: 11px;
   color: #fff;
-  background: var(--tone-gradient);
+  background: none;
   box-shadow: 0 5px 12px var(--tone-shadow);
 }
 
@@ -429,7 +463,7 @@ onMounted(async () => {
 .content-tile__title {
   font-size: 14px;
   font-weight: 600;
-  color: #1f2a44;
+  color: var(--jf-text);
 }
 
 .content-tile__hint {
@@ -450,7 +484,7 @@ onMounted(async () => {
   font-size: 22px;
   font-weight: 650;
   line-height: 1.1;
-  color: #1f2a44;
+  color: var(--jf-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -477,13 +511,9 @@ onMounted(async () => {
 }
 
 .is-cyan {
-  --tone-gradient: linear-gradient(135deg, #4fd1e0, #06aed4);
-  --tone-shadow: rgba(6, 174, 212, 0.3);
 }
 
 .is-rose {
-  --tone-gradient: linear-gradient(135deg, #ff8fa3, #f0455f);
-  --tone-shadow: rgba(240, 69, 95, 0.3);
 }
 
 @keyframes stat-in {
@@ -590,4 +620,146 @@ onMounted(async () => {
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 10px;
 }
+
+/* ============================================================
+   日系清新适配：白卡 + 发丝边框 + 无阴影，图标用同色系粉彩块
+   （替换掉之前的 Neumorphism 残留）
+   ============================================================ */
+.stat-card,
+.content-tile {
+  background: var(--jf-surface);
+  border: var(--jf-hair);
+  border-radius: var(--jf-radius);
+  box-shadow: none;
+  transition: box-shadow 0.3s ease;
+}
+
+.stat-card:hover,
+.content-tile:hover {
+  transform: none;
+  border: var(--jf-hair);
+  box-shadow: var(--jf-shadow-hover, 0 2px 8px rgba(0, 0, 0, 0.05));
+}
+
+/* 顶部渐变高光不符合"禁用渐变"规则，去掉 */
+.stat-card::after {
+  display: none;
+}
+
+.stat-card__icon,
+.content-tile__icon {
+  background: var(--tone-soft, #eef7ff);
+  color: var(--tone-color, var(--jf-sky-deep));
+  box-shadow: none;
+}
+
+.stat-card__value,
+.content-tile__value,
+.content-tile__title {
+  color: var(--jf-text);
+}
+
+.stat-card__label,
+.content-tile__hint {
+  color: var(--jf-text-2);
+}
+
+.content-tile__action {
+  color: var(--jf-sky-deep);
+}
+
+.page-subtitle {
+  color: var(--jf-text-2);
+}
+
+/* 粉彩图标配色（与 main.css 的日系调色板一致），只用在图标上 */
+.is-blue { --tone-color: #3d8fd1; --tone-soft: #eaf5fe; }
+.is-violet { --tone-color: #3d8fd1; --tone-soft: #eaf5fe; }
+.is-green { --tone-color: #23806b; --tone-soft: #eaf7f4; }
+.is-amber { --tone-color: #b5791a; --tone-soft: #fbf4e6; }
+.is-cyan { --tone-color: #23806b; --tone-soft: #eaf7f4; }
+.is-rose { --tone-color: #c94a63; --tone-soft: #fdeef2; }
+
+
+/* ================= 待处理提示（U8） ================= */
+.alert-card {
+  margin-bottom: 18px;
+}
+
+.alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.alert-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: var(--jf-hair, 1px solid rgba(212, 212, 207, 0.4));
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: background 300ms ease, box-shadow 300ms ease;
+}
+
+.alert-row:hover {
+  background: #f7fafd;
+  box-shadow: var(--jf-shadow-hover, 0 2px 8px rgba(0, 0, 0, 0.05));
+}
+
+.alert-row__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+
+.alert-row.is-info .alert-row__dot {
+  background: #64b5f6;
+}
+
+.alert-row.is-warning .alert-row__dot {
+  background: #d9971f;
+}
+
+.alert-row.is-danger .alert-row__dot {
+  background: #e05a75;
+}
+
+.alert-row__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.alert-row__title {
+  font-size: 14px;
+  color: var(--jf-text, #2f3a4a);
+}
+
+.alert-row__detail {
+  font-size: 13px;
+  color: var(--jf-text-2, #5a6b80);
+  margin-top: 2px;
+}
+
+.alert-row__action {
+  font-size: 13px;
+  color: var(--jf-sky-deep, #2f7ab8);
+  flex: 0 0 auto;
+}
+
+@media (max-width: 820px) {
+  .alert-row {
+    flex-wrap: wrap;
+  }
+
+  .alert-row__action {
+    width: 100%;
+    text-align: right;
+  }
+}
+
 </style>

@@ -24,13 +24,21 @@ public class DuplicateController {
 
     @GetMapping
     public ApiResult<Map<String, Object>> groups(@RequestParam(defaultValue = "1") long page,
-                                                 @RequestParam(defaultValue = "20") long size) {
-        return ApiResult.ok(duplicateService.groups(SecurityUtils.currentUser(), page, size));
+                                                 @RequestParam(defaultValue = "20") long size,
+                                                 @RequestParam(required = false) Long storageConfigId,
+                                                 @RequestParam(required = false) String directory) {
+        return ApiResult.ok(duplicateService.groups(SecurityUtils.currentUser(), page, size, storageConfigId, directory));
     }
 
-    /** 清理：每组保留最早的一张，其余移入回收站；带 hash 只清理这一组 */
+    /**
+     * 清理：每组只保留一张，其余移入回收站。
+     *
+     * @param keep 保留策略：earliest（最早，默认）/ latest（最新）/ largest（最大）
+     */
     @DeleteMapping
-    public ApiResult<Integer> cleanup(@RequestParam(required = false) String hash) {
-        return ApiResult.ok(duplicateService.cleanup(SecurityUtils.currentUser(), hash));
+    public ApiResult<Integer> cleanup(@RequestParam(required = false) String hash,
+                                      @RequestParam(defaultValue = "earliest") String keep,
+                                      @RequestParam(required = false) Long storageConfigId) {
+        return ApiResult.ok(duplicateService.cleanup(SecurityUtils.currentUser(), hash, keep, storageConfigId));
     }
 }

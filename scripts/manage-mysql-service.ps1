@@ -383,7 +383,7 @@ function Invoke-Init {
     if ($NoCreate) { $finalUser = $User; $finalPassword = $Password }
 
     $lines = @(
-        '# qxfly-image-host 数据库连接配置（由 mysql-service.ps1 生成，已被 .gitignore 忽略）',
+        '# qxfly-image-host 数据库连接配置（由 manage-mysql-service.ps1 生成，已被 .gitignore 忽略）',
         'MYSQL_HOST=127.0.0.1',
         'MYSQL_PORT=3306',
         ('MYSQL_DATABASE=' + $Database),
@@ -398,7 +398,7 @@ function Invoke-Init {
     else { Write-Warn ('业务账号连接测试失败：' + $check.Output) }
 
     Write-Host ''
-    Write-Info '现在可直接启动系统：.\start.ps1'
+    Write-Info '现在可直接启动系统：.\start.cmd'
 }
 
 # ---------------------------------------------------------------- 入口

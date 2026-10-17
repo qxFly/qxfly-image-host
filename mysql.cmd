@@ -2,11 +2,13 @@
 chcp 65001 >nul
 setlocal
 
-rem 项目内的 mysql 客户端入口：在项目根目录直接敲 mysql 即可，
-rem 不需要事先把 MySQL 的 bin 目录加进 PATH。
-rem   mysql                进入交互命令行
-rem   mysql -uroot -p      正常客户端用法（参数原样透传）
+rem In-project MySQL client entry point: just type mysql in the project root,
+rem no need to add the MySQL bin directory to PATH first.
+rem   mysql                 open the interactive shell
+rem   mysql -uroot -p        normal client usage (arguments are passed through)
 rem   mysql -e "show databases;"
+rem
+rem NOTE: keep this file ASCII-only (see package.cmd for why).
 
 set "MYSQL_EXE="
 for %%D in (
@@ -25,8 +27,8 @@ if not defined MYSQL_EXE (
 )
 
 if not defined MYSQL_EXE (
-  echo [x] 未找到 mysql.exe
-  echo     请执行 mysql-service.cmd status 检查安装位置
+  echo [x] mysql.exe was not found
+  echo     run 'mysql-service.cmd status' to check the install location
   exit /b 1
 )
 

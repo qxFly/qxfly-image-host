@@ -3,7 +3,9 @@ package com.qxfly.imagehost.controller;
 import com.qxfly.imagehost.common.ApiResult;
 import com.qxfly.imagehost.dto.SettingsRequest;
 import com.qxfly.imagehost.service.AppSettingService;
+import com.qxfly.imagehost.service.ThumbnailService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,10 +25,23 @@ import java.util.Map;
 public class SettingsController {
 
     private final AppSettingService appSettingService;
+    private final ThumbnailService thumbnailService;
 
     @GetMapping
     public ApiResult<Map<String, Object>> get() {
         return ApiResult.ok(appSettingService.snapshot());
+    }
+
+    /** 缩略图缓存占用（给设置页显示） */
+    @GetMapping("/thumb-cache")
+    public ApiResult<Map<String, Object>> thumbCache() {
+        return ApiResult.ok(thumbnailService.cacheStats());
+    }
+
+    /** 清空缩略图缓存（只影响磁盘缓存，原图不受影响） */
+    @DeleteMapping("/thumb-cache")
+    public ApiResult<Integer> clearThumbCache() {
+        return ApiResult.ok(thumbnailService.clearCache());
     }
 
     @PutMapping

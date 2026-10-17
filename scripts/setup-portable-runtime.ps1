@@ -9,14 +9,14 @@
         runtime/win-x64/node     Windows 便携 Node 20 LTS
         runtime/linux-x64/jdk    Ubuntu 便携 JDK 17
         runtime/linux-x64/node   Ubuntu 便携 Node 20 LTS
-    start.ps1 / start.sh 会优先使用这些运行时，找不到才回退系统 PATH。
+    start.cmd / start.sh 会优先使用这些运行时，找不到才回退系统 PATH。
     下载源按顺序重试，国内源优先。
 
 .EXAMPLE
-    .\scripts\setup-runtime.ps1                 # 拉取 win + linux 两套
-    .\scripts\setup-runtime.ps1 -Platform win    # 只拉 Windows
-    .\scripts\setup-runtime.ps1 -Force           # 重新下载覆盖
-    .\scripts\setup-runtime.ps1 -KeepArchive     # 保留压缩包，便于离线拷贝到 Ubuntu
+    .\scripts\setup-portable-runtime.ps1                 # 拉取 win + linux 两套
+    .\scripts\setup-portable-runtime.ps1 -Platform win    # 只拉 Windows
+    .\scripts\setup-portable-runtime.ps1 -Force           # 重新下载覆盖
+    .\scripts\setup-portable-runtime.ps1 -KeepArchive     # 保留压缩包，便于离线拷贝到 Ubuntu
 #>
 [CmdletBinding()]
 param(

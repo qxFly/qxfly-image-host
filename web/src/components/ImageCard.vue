@@ -10,6 +10,7 @@
         v-if="src"
         class="image-card__thumb"
         :src="src"
+        :alt="image.originalName || '图片'"
         fit="cover"
         :preview-src-list="[image.previewUrl || image.url]"
         preview-teleported
@@ -44,7 +45,8 @@
       </div>
     </div>
 
-    <div class="image-card__actions" @click.stop>
+    <!-- 触屏没有 hover：小屏时操作条常显（U1），否则手机上点不到这些按钮 -->
+    <div class="image-card__actions" :class="{ 'is-always': isMobile }" @click.stop>
       <el-button size="small" type="primary" plain @click="emit('links', image, 'download')">下载</el-button>
       <el-button size="small" @click="emit('links', image, 'copy')">直链</el-button>
       <el-button size="small" @click="emit('links', image, 'markdown')">MD</el-button>
@@ -65,8 +67,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useCachedImage } from '@/composables/useCachedImage'
+import { useIsMobile } from '@/utils/responsive'
 import { formatSize } from '@/utils/format'
 import type { ImageVO, LinkMode } from '@/types'
+
+const isMobile = useIsMobile()
 
 const props = defineProps<{
   image: ImageVO
@@ -114,7 +119,7 @@ function onCheckClick(event: MouseEvent) {
 
 .image-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 10px 26px rgba(31, 42, 68, 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 
 .image-card.is-selected {
@@ -149,10 +154,10 @@ function onCheckClick(event: MouseEvent) {
   justify-content: center;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(31, 42, 68, 0.16);
+  border: 1px solid var(--jf-hair);
   color: #c0c4cc;
   cursor: pointer;
-  box-shadow: 0 1px 4px rgba(31, 42, 68, 0.16);
+  box-shadow: none;
   transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.18s;
 }
 
@@ -180,7 +185,7 @@ function onCheckClick(event: MouseEvent) {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: rgba(31, 42, 68, 0.55);
+  background: rgba(0, 0, 0, 0.45);
   color: #fff;
   opacity: 0;
   pointer-events: none;

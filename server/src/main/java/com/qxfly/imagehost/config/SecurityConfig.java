@@ -52,6 +52,11 @@ public class SecurityConfig {
             // 审计日志
             "/api/audit-logs",
             "/api/audit-logs/**",
+            // 元数据清单导出 / 回灌
+            "/api/images/export",
+            "/api/images/export/**",
+            "/api/images/import-manifest",
+            "/api/images/import-manifest/**",
             // 重复图片查找与清理
             "/api/images/duplicates",
             "/api/images/duplicates/**",
@@ -106,6 +111,7 @@ public class SecurityConfig {
 
                     // 分享相册的公开访问：拿到 token 的人不用登录就能看（需要密码的在这里校验密码）
                     registry.requestMatchers(HttpMethod.POST, "/api/shares/*/view").permitAll();
+                    registry.requestMatchers(HttpMethod.GET, "/api/shares/*/download").permitAll();
 
                     // 图库的「存储后端」筛选要读配置列表（密钥已打码），所有登录用户都能看
                     registry.requestMatchers(HttpMethod.GET, "/api/storage-configs").authenticated();

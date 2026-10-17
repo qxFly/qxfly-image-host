@@ -57,6 +57,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -262,8 +263,11 @@ public class ImageService {
         return ObjectKeys.build(setting.pathPrefix(), originalName, shard);
     }
 
-    public PageResult<ImageVO> page(AuthUser user, long page, long size, String keyword,
-                                   Long storageConfigId, String directory, String matchMode) {
+    public PageResult<ImageVO> page(AuthUser user, com.qxfly.imagehost.dto.ImageQueryDTO query) {
+        String keyword = query.getKeyword();
+        String matchMode = query.getMatchMode();
+        String directory = query.getDirectory();
+        Long storageConfigId = query.getStorageConfigId();
         // 超级管理员看自己的图库，普通用户看超级管理员的图库（只读）
         LambdaQueryWrapper<ImageEntity> wrapper = Wrappers.<ImageEntity>lambdaQuery()
                 .in(ImageEntity::getUserId, userService.visibleOwnerIds(user))
@@ -274,6 +278,15 @@ public class ImageService {
                 // 其余目录筛选按前缀匹配，选中父目录会连同子目录一起显示（与目录树的 totalCount 一致）
                 .likeRight(StringUtils.hasText(directory) && !ROOT_DIRECTORY.equals(directory),
                         ImageEntity::getObjectKey, ObjectKeys.escapeLike(directoryWithSlash(directory)))
+                // 体积 / 日期 / 尺寸区间（未填的维度不参与过滤）
+                .ge(query.getMinSize() != null, ImageEntity::getSize, query.getMinSize())
+                .le(query.getMaxSize() != null, ImageEntity::getSize, query.getMaxSize())
+                .ge(query.createdAtFrom() != null, ImageEntity::getCreatedAt, query.createdAtFrom())
+                .le(query.createdAtTo() != null, ImageEntity::getCreatedAt, query.createdAtTo())
+                .ge(query.getMinWidth() != null, ImageEntity::getWidth, query.getMinWidth())
+                .le(query.getMaxWidth() != null, ImageEntity::getWidth, query.getMaxWidth())
+                .ge(query.getMinHeight() != null, ImageEntity::getHeight, query.getMinHeight())
+                .le(query.getMaxHeight() != null, ImageEntity::getHeight, query.getMaxHeight())
                 .orderByDesc(ImageEntity::getId);
 
         String value = normalizeKeyword(keyword);
@@ -297,8 +310,9 @@ public class ImageService {
             }
         }
 
-        long safeSize = Math.min(Math.max(size, 1), 500);
-        Page<ImageEntity> result = imageMapper.selectPage(new Page<>(Math.max(page, 1), safeSize), wrapper);
+        long safeSize = Math.min(Math.max(query.getSize(), 1), 500);
+        Page<ImageEntity> result = imageMapper.selectPage(
+                new Page<>(Math.max(query.getPage(), 1), safeSize), wrapper);
         Map<Long, StorageConfigEntity> configs = configsOf(user);
         List<ImageVO> records = result.getRecords().stream().map(e -> toVO(e, configs)).toList();
         return PageResult.of(result.getTotal(), result.getCurrent(), result.getSize(), records);
@@ -465,6 +479,184 @@ public class ImageService {
             }
         }
         return result;
+    }
+
+    /**
+     * 导出图片元数据清单（数据安全兜底：图片在云端、清单在库里，库出问题时靠它恢复）。
+     * <p>
+     * 只导出元数据，不含图片内容；JSON 为数组、CSV 带 BOM（Excel 打开中文不乱码）。
+     */
+    public byte[] exportManifest(AuthUser user, String format) {
+        List<Long> ownerIds = userService.visibleOwnerIds(user);
+        List<ImageEntity> rows = imageMapper.selectList(Wrappers.<ImageEntity>lambdaQuery()
+                .in(ImageEntity::getUserId, ownerIds)
+                .orderByAsc(ImageEntity::getId)
+                .last("LIMIT 100000"));
+        if ("json".equalsIgnoreCase(format)) {
+            List<Map<String, Object>> items = new ArrayList<>(rows.size());
+            for (ImageEntity e : rows) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", e.getId());
+                item.put("userId", e.getUserId());
+                item.put("storageConfigId", e.getStorageConfigId());
+                item.put("storageType", e.getStorageType());
+                item.put("originalName", e.getOriginalName());
+                item.put("objectKey", e.getObjectKey());
+                item.put("url", e.getUrl());
+                item.put("thumbUrl", e.getThumbUrl());
+                item.put("mimeType", e.getMimeType());
+                item.put("size", e.getSize());
+                item.put("hash", e.getHash());
+                item.put("width", e.getWidth());
+                item.put("height", e.getHeight());
+                item.put("deleted", e.getDeleted());
+                item.put("trashKey", e.getTrashKey());
+                item.put("createdAt", e.getCreatedAt() == null ? null : e.getCreatedAt().toString());
+                items.add(item);
+            }
+            StringBuilder json = new StringBuilder("{\"items\":");
+            json.append(com.qxfly.imagehost.storage.support.Json.write(items)).append('}');
+            return json.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        csv.append("id,userId,storageConfigId,storageType,originalName,objectKey,url,thumbUrl,mimeType,size,hash,width,height,deleted,trashKey,createdAt\n");
+        for (ImageEntity e : rows) {
+            csv.append(e.getId()).append(',')
+                    .append(e.getUserId()).append(',')
+                    .append(e.getStorageConfigId()).append(',')
+                    .append(csvCell(e.getStorageType())).append(',')
+                    .append(csvCell(e.getOriginalName())).append(',')
+                    .append(csvCell(e.getObjectKey())).append(',')
+                    .append(csvCell(e.getUrl())).append(',')
+                    .append(csvCell(e.getThumbUrl())).append(',')
+                    .append(csvCell(e.getMimeType())).append(',')
+                    .append(e.getSize() == null ? 0 : e.getSize()).append(',')
+                    .append(csvCell(e.getHash())).append(',')
+                    .append(e.getWidth() == null ? "" : e.getWidth()).append(',')
+                    .append(e.getHeight() == null ? "" : e.getHeight()).append(',')
+                    .append(e.getDeleted() == null ? 0 : e.getDeleted()).append(',')
+                    .append(csvCell(e.getTrashKey())).append(',')
+                    .append(csvCell(e.getCreatedAt() == null ? null : e.getCreatedAt().toString())).append('\n');
+        }
+        return csv.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static String csvCell(String value) {
+        if (value == null) {
+            return "";
+        }
+        String text = value.replace("\r", " ").replace("\n", " ");
+        if (text.contains(",") || text.contains("\"")) {
+            text = "\"" + text.replace("\"", "\"\"") + "\"";
+        }
+        return text;
+    }
+
+    /**
+     * 按导出的清单回灌元数据：只补库里没有的记录，不碰云端文件。
+     * 去重键 = objectKey（同一对象键只留一条）；被删掉的记录会一并恢复成"在用"。
+     *
+     * @return 插入与跳过的数量
+     */
+    @Transactional
+    public Map<String, Object> importManifest(AuthUser user, List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            throw new BizException("清单为空：请先上传导出的 csv/json 文件");
+        }
+        if (rows.size() > 100000) {
+            throw new BizException("清单最多 100000 行，当前 " + rows.size());
+        }
+        Long userId = user.id();
+        List<Long> configIds = userService.visibleOwnerIds(user);
+        // 没有任何可用存储配置时无法回灌（图片总要挂在某个后端上）
+        List<com.qxfly.imagehost.dto.StorageConfigVO> configs = storageConfigService.list(userId);
+        StorageConfigEntity fallback = configs.isEmpty()
+                ? null : storageConfigService.requireOwned(userId, configs.get(0).getId());
+
+        int inserted = 0;
+        int skipped = 0;
+        Set<String> seenKeys = new java.util.HashSet<>();
+        for (Map<String, Object> row : rows) {
+            String objectKey = stringValueOf(row.get("objectKey"));
+            if (!StringUtils.hasText(objectKey)) {
+                skipped++;
+                continue;
+            }
+            if (!seenKeys.add(objectKey)) {
+                skipped++;
+                continue;
+            }
+            // 库里已有同对象键的记录就跳过（幂等：重复导入不会产生重复行）
+            Long exists = imageMapper.selectCount(Wrappers.<ImageEntity>lambdaQuery()
+                    .in(ImageEntity::getUserId, configIds)
+                    .eq(ImageEntity::getObjectKey, objectKey));
+            if (exists != null && exists > 0) {
+                skipped++;
+                continue;
+            }
+            // CSV 回灌时字段都是字符串，JSON 回灌时可能是数字，这里统一做数值转换
+            Long configId = toLong(row.get("storageConfigId"));
+            boolean configOk = configId != null && configIds.contains(configId);
+            if (!configOk && fallback == null) {
+                skipped++;
+                continue;
+            }
+
+            ImageEntity entity = new ImageEntity();
+            entity.setUserId(userId);
+            entity.setStorageConfigId(configOk ? configId : fallback.getId());
+            entity.setStorageType(configOk ? stringValueOf(row.get("storageType")) : fallback.getType());
+            entity.setOriginalName(StringUtils.hasText(stringValueOf(row.get("originalName")))
+                    ? stringValueOf(row.get("originalName")) : ObjectKeys.fileName(objectKey));
+            entity.setObjectKey(objectKey);
+            entity.setUrl(StringUtils.hasText(stringValueOf(row.get("url"))) ? stringValueOf(row.get("url")) : "");
+            entity.setThumbUrl(stringValueOf(row.get("thumbUrl")));
+            entity.setMimeType(stringValueOf(row.get("mimeType")));
+            Long size = toLong(row.get("size"));
+            entity.setSize(size == null ? 0L : size);
+            entity.setHash(stringValueOf(row.get("hash")));
+            entity.setWidth(toInt(row.get("width")));
+            entity.setHeight(toInt(row.get("height")));
+            // 回灌的记录默认放回图库（回填的记录如果本就是回收站状态，会因文件可能已不在而留痕，这里统一按在用处理）
+            entity.setDeleted(LIVE);
+            entity.setTrashKey(null);
+            imageMapper.insert(entity);
+            inserted++;
+        }
+        auditService.log(AuditService.Actions.SETTINGS_UPDATE, "IMAGE", null,
+                "回灌元数据清单：" + inserted + " 条插入、" + skipped + " 条跳过");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("inserted", inserted);
+        result.put("skipped", skipped);
+        result.put("total", rows.size());
+        return result;
+    }
+
+    private static String stringValueOf(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private static Long toLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Integer toInt(Object value) {
+        Long parsed = toLong(value);
+        return parsed == null ? null : parsed.intValue();
     }
 
     /** 回收站列表：只列出逻辑删除的图片，最近删的在前 */
